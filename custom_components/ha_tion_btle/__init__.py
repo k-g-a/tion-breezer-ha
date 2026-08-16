@@ -23,10 +23,6 @@ from .tion_btle.tion import MaxTriesExceededError, Tion
 _LOGGER = logging.getLogger(__name__)
 
 
-async def async_setup(hass, config):
-    return True
-
-
 async def async_setup_entry(hass, config_entry: ConfigEntry):
     _LOGGER.info("Setting up %s ", config_entry.unique_id)
 
