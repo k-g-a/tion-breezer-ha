@@ -11,7 +11,6 @@ else:
     from .tion import TionException
     from .light_family import TionLiteFamily
 
-logging.basicConfig(level=logging.DEBUG)
 _LOGGER = logging.getLogger(__name__)
 
 

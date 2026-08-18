@@ -9,7 +9,6 @@ if __package__ == "":
 else:
     from .tion import Tion, TionException
 
-logging.basicConfig(level=logging.DEBUG)
 _LOGGER = logging.getLogger(__name__)
 
 

@@ -11,7 +11,7 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import callback, async_get_hass
+from homeassistant.core import callback
 
 from . import tion_btle
 from .const import DOMAIN, TION_SCHEMA, CONF_MAC
@@ -94,9 +94,9 @@ class TionFlow:
         return data
 
     @staticmethod
-    def getTion(model: str, mac: str) -> tion_btle.TionS3 | tion_btle.TionLite | tion_btle.TionS4:
+    def getTion(model: str, mac: str, hass) -> tion_btle.TionS3 | tion_btle.TionLite | tion_btle.TionS4:
 
-        btle_device = bluetooth.async_ble_device_from_address(hass=async_get_hass(), address=mac, connectable=True)
+        btle_device = bluetooth.async_ble_device_from_address(hass=hass, address=mac, connectable=True)
         if btle_device is None:
             message = f"Could not find device with {mac=}"
             _LOGGER.critical(f"getTion: {message}")
@@ -116,7 +116,7 @@ class TionFlow:
 class TionConfigFlow(TionFlow, config_entries.ConfigFlow, domain=DOMAIN):
     """Initial setup."""
     VERSION = 1
-    CONNECTION_CLASS = config_entries.CONN_CLASS_CLOUD_POLL
+    CONNECTION_CLASS = config_entries.CONN_CLASS_LOCAL_POLL
 
     def __init__(self):
         super().__init__()
@@ -145,7 +145,7 @@ class TionConfigFlow(TionFlow, config_entries.ConfigFlow, domain=DOMAIN):
                 _LOGGER.debug("Going create entry with name %s" % input['name'])
                 _LOGGER.debug(input)
                 try:
-                    _tion: Tion = self.getTion(input['model'], input['mac'])
+                    _tion: Tion = self.getTion(input['model'], input['mac'], self.hass)
                     result = await _tion.get()
                 except Exception as e:
                     _LOGGER.error("Could not get data from breezer. result is %s, error: %s" % (result, str(e)))
@@ -161,7 +161,7 @@ class TionConfigFlow(TionFlow, config_entries.ConfigFlow, domain=DOMAIN):
         result = {}
         try:
             _LOGGER.debug(self._data)
-            _tion: Tion = self.getTion(self._data['model'], self._data['mac'])
+            _tion: Tion = self.getTion(self._data['model'], self._data['mac'], self.hass)
             await _tion.pair()
             # We should sleep a bit, because immediately connection will cause device disconnected exception while
             # enabling notifications
