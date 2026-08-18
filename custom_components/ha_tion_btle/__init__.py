@@ -74,14 +74,12 @@ class TionInstance(DataUpdateCoordinator):
         except KeyError:
             pass
 
-        # A failed BLE operation should recover promptly instead of leaving the
-        # device unavailable for ten minutes.
-        self._delay: int = 60
+        self._failure_count = 0
+        self._failure_backoff = (60, 120, 300, 600)
         self._operation_lock = asyncio.Lock()
 
         self.__tion: Tion = self.getTion(self.model, btle_device)
         self.__keep_alive = datetime.timedelta(seconds=self.__keep_alive)
-        self._delay = datetime.timedelta(seconds=self._delay)
         self.rssi: int = 0
 
         if self._config_entry.unique_id is None:
@@ -126,15 +124,16 @@ class TionInstance(DataUpdateCoordinator):
         try:
             async with self._operation_lock:
                 response = await self.__tion.get()
-            self.update_interval = self.__keep_alive
+            self._record_success()
 
         except MaxTriesExceededError as e:
-            _LOGGER.warning("BLE retry limit exceeded; delaying the next poll")
+            delay = self._record_failure()
+            _LOGGER.warning("BLE retry limit exceeded; delaying the next poll by %s seconds", delay)
             await self.__tion.reset_connection()
-            self.update_interval = self._delay
             raise UpdateFailed("Could not connect to the Tion breezer") from e
         except Exception as e:
-            _LOGGER.warning("Tion update failed: %s", e)
+            delay = self._record_failure()
+            _LOGGER.warning("Tion update failed: %s; delaying the next poll by %s seconds", e, delay)
             await self.__tion.reset_connection()
             raise UpdateFailed(f"Tion update failed: {e}") from e
 
@@ -169,12 +168,24 @@ class TionInstance(DataUpdateCoordinator):
         try:
             async with self._operation_lock:
                 await self.__tion.set(kwargs)
+            self._record_success()
             self.data.update(original_args)
             self.async_update_listeners()
         except Exception as e:
-            _LOGGER.warning("Tion set failed: %s", e)
+            delay = self._record_failure()
+            _LOGGER.warning("Tion set failed: %s; delaying the next poll by %s seconds", e, delay)
             await self.__tion.reset_connection()
             raise UpdateFailed(f"Tion set failed: {e}") from e
+
+    def _record_success(self) -> None:
+        self._failure_count = 0
+        self.update_interval = self.__keep_alive
+
+    def _record_failure(self) -> int:
+        delay = self._failure_backoff[min(self._failure_count, len(self._failure_backoff) - 1)]
+        self._failure_count += 1
+        self.update_interval = datetime.timedelta(seconds=delay)
+        return delay
 
     @staticmethod
     def getTion(model: str, mac: str | BLEDevice) -> tion_btle.TionS3 | tion_btle.TionLite | tion_btle.TionS4:
