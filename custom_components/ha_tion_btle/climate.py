@@ -193,7 +193,7 @@ class TionClimateEntity(ClimateEntity, CoordinatorEntity):
         if self.preset_mode == PRESET_SLEEP:
             if int(fan_mode) > self.sleep_max_fan_mode:
                 _LOGGER.info("Fan speed %s was required, but I'm in SLEEP mode, so it should not be greater than %d",
-                             self.sleep_max_fan_mode)
+                             fan_mode, self.sleep_max_fan_mode)
                 fan_mode = self.sleep_max_fan_mode
 
         if (self.preset_mode == PRESET_BOOST and self._is_boost) and fan_mode != self.boost_fan_mode:
@@ -255,11 +255,6 @@ class TionClimateEntity(ClimateEntity, CoordinatorEntity):
             HVACMode.HEAT if self.coordinator.data.get("heater") else HVACMode.FAN_ONLY
         self._attr_hvac_action = HVACAction.OFF if not self.coordinator.data.get("is_on") else \
             HVACAction.HEATING if self.coordinator.data.get("is_heating") else HVACAction.FAN
-
-    @property
-    def available(self) -> bool:
-        """Return if entity is available."""
-        return True
 
     async def set_air_source(self, source: str):
         _LOGGER.debug(f"set_air_source: {source}")

@@ -72,19 +72,19 @@ class TionFan(FanEntity, CoordinatorEntity):
         pass
 
     def set_direction(self, direction: str) -> None:
-        raise NotImplemented
+        raise NotImplementedError
 
     def turn_on(self, percentage: int | None = None, preset_mode: str | None = None, **kwargs) -> None:
-        raise NotImplemented
+        raise NotImplementedError
 
     def oscillate(self, oscillating: bool) -> None:
-        raise NotImplemented
+        raise NotImplementedError
 
     def turn_off(self, **kwargs: Any) -> None:
         pass
 
     def set_percentage(self, percentage: int) -> None:
-        raise NotImplemented
+        raise NotImplementedError
 
     def __init__(self, description: FanEntityDescription, instance: TionInstance, hass: HomeAssistant):
         """Initialize the fan."""
@@ -165,7 +165,7 @@ class TionFan(FanEntity, CoordinatorEntity):
         await self.coordinator.set(fan_speed=target_speed, is_on=True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        if self._saved_fan_mode is None and self.fan_mode > 0:
+        if self._saved_fan_mode is None and (self.fan_mode or 0) > 0:
             self._saved_fan_mode = self.fan_mode
 
         await self.coordinator.set(is_on=False)
@@ -175,8 +175,3 @@ class TionFan(FanEntity, CoordinatorEntity):
         self._attr_is_on = self.coordinator.data.get("is_on")
         self._attr_percentage = self.mode2percent() if self._attr_is_on else 0  # should check attr to avoid deadlock
         self.async_write_ha_state()
-
-    @property
-    def available(self) -> bool:
-        """Return if entity is available."""
-        return True

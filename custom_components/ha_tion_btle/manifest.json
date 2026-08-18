@@ -6,6 +6,7 @@
   ],
   "config_flow": true,
   "dependencies": [
+    "bluetooth",
     "bluetooth_adapters"
   ],
   "documentation": "https://github.com/k-g-a/tion-breezer-ha#readme",

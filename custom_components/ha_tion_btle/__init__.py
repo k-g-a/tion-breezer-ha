@@ -166,8 +166,13 @@ class TionInstance(DataUpdateCoordinator):
 
         args = ', '.join('%s=%r' % x for x in kwargs.items())
         _LOGGER.info("Need to set: " + args)
-        async with self._operation_lock:
-            await self.__tion.set(kwargs)
+        try:
+            async with self._operation_lock:
+                await self.__tion.set(kwargs)
+        except Exception as e:
+            _LOGGER.warning("Tion set failed: %s", e)
+            await self.__tion.reset_connection()
+            raise UpdateFailed(f"Tion set failed: {e}") from e
         self.data.update(original_args)
         self.async_update_listeners()
 
