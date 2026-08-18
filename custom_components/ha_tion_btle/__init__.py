@@ -169,12 +169,12 @@ class TionInstance(DataUpdateCoordinator):
         try:
             async with self._operation_lock:
                 await self.__tion.set(kwargs)
+            self.data.update(original_args)
+            self.async_update_listeners()
         except Exception as e:
             _LOGGER.warning("Tion set failed: %s", e)
             await self.__tion.reset_connection()
             raise UpdateFailed(f"Tion set failed: {e}") from e
-        self.data.update(original_args)
-        self.async_update_listeners()
 
     @staticmethod
     def getTion(model: str, mac: str | BLEDevice) -> tion_btle.TionS3 | tion_btle.TionLite | tion_btle.TionS4:
