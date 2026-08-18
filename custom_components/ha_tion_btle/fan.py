@@ -125,7 +125,7 @@ class TionFan(FanEntity, CoordinatorEntity):
         except KeyError:
             _LOGGER.warning(f"Could not to convert {percentage} to mode with {self._percent_mode_mapping}. "
                             f"Will use fall back method.")
-            for i in range(self._attr_speed_count + 1):
+            for i in range(self._attr_speed_count):
                 if percentage < self.percentage_step * i:
                     break
                 else:
