@@ -75,7 +75,7 @@ class TionInstance(DataUpdateCoordinator):
             pass
 
         self._failure_count = 0
-        self._failure_backoff = (60, 120, 300, 600)
+        self._failure_backoff = (5, 15, 60, 120, 300)
         self._operation_lock = asyncio.Lock()
 
         self.__tion: Tion = self.getTion(self.model, btle_device)
