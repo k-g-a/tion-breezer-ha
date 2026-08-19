@@ -14,7 +14,6 @@ dependencies = [
 
 [project.optional-dependencies]
 test = [
-  "habluetooth>=6.0",
   "pytest>=8",
   "pytest-asyncio>=0.23",
   "ruff>=0.12",
@@ -23,7 +22,7 @@ test = [
 [tool.pytest.ini_options]
 addopts = "-q"
 asyncio_mode = "auto"
-pythonpath = ["custom_components/ha_tion_btle"]
+pythonpath = ["custom_components/ha_tion_btle/lib"]
 testpaths = ["tests"]
 
 [tool.ruff]

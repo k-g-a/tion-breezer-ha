@@ -4,15 +4,15 @@ This repository combines two previously separate projects while retaining their 
 
 ## Home Assistant integration
 
-`custom_components/ha_tion_btle`, excluding its `tion_btle` subdirectory, is derived from `TionAPI/HA-tion` at commit `7f41b890b2241f8541a23e13bb71093632d6109f`.
+`custom_components/ha_tion_btle`, excluding its `lib/tion_btle` subdirectory, is derived from `TionAPI/HA-tion` at commit `7f41b890b2241f8541a23e13bb71093632d6109f`.
 
 Copyright belongs to the original contributors. The primary original author is Igor Tkachenko (`@IATkachenko`). This part is licensed under Apache License 2.0; see the root `LICENSE` file.
 
 ## Vendored Bluetooth library
 
-`custom_components/ha_tion_btle/tion_btle` is derived from `TionAPI/tion_python`, including the reliability changes merged in `k-g-a/tion_python#1`, at commit `cf940bc21de629bf652762065b8466c39cdb0280`.
+`custom_components/ha_tion_btle/lib/tion_btle` is derived from `TionAPI/tion_python` and the embedded-library prototype published by `@tms320` in `TionAPI/HA-tion#154`. It also retains relevant safety fixes from `k-g-a/tion_python#1` where they do not alter the working transport behavior.
 
-Copyright belongs to the original contributors. The primary original author is Igor Tkachenko (`@IATkachenko`). This part is licensed under GNU Lesser General Public License version 3 or later; see `custom_components/ha_tion_btle/tion_btle/LICENSE`.
+Copyright belongs to the original contributors. The primary original author is Igor Tkachenko (`@IATkachenko`). This part is licensed under GNU Lesser General Public License version 3 or later; see `custom_components/ha_tion_btle/lib/tion_btle/LICENSE`.
 
 ## Additional prior work
 

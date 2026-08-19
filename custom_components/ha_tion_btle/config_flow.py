@@ -4,18 +4,19 @@ from __future__ import annotations
 import logging
 import datetime
 import asyncio
+from contextlib import suppress
 
 import bleak
-import tion_btle
 import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import callback, async_get_hass
-from tion_btle.tion import Tion
+from homeassistant.core import HomeAssistant, callback
 
 from .const import DOMAIN, TION_SCHEMA, CONF_MAC
+from .lib import tion_btle
+from .lib.tion_btle.tion import Tion
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -94,29 +95,43 @@ class TionFlow:
         return data
 
     @staticmethod
-    def getTion(model: str, mac: str) -> tion_btle.TionS3 | tion_btle.TionLite | tion_btle.TionS4:
+    def getTion(
+        model: str, mac: str, hass: HomeAssistant
+    ) -> tion_btle.TionS3 | tion_btle.TionLite | tion_btle.TionS4:
 
-        btle_device = bluetooth.async_ble_device_from_address(hass=async_get_hass(), address=mac, connectable=True)
+        btle_device = bluetooth.async_ble_device_from_address(hass=hass, address=mac, connectable=True)
         if btle_device is None:
             message = f"Could not find device with {mac=}"
             _LOGGER.critical(f"getTion: {message}")
             raise bleak.BleakError(message)
 
         if model == 'S3':
-            from tion_btle.s3 import TionS3 as Breezer
+            from .lib.tion_btle.s3 import TionS3 as Breezer
         elif model == 'S4':
-            from tion_btle.s4 import TionS4 as Breezer
+            from .lib.tion_btle.s4 import TionS4 as Breezer
         elif model == 'Lite':
-            from tion_btle.lite import TionLite as Breezer
+            from .lib.tion_btle.lite import TionLite as Breezer
         else:
             raise NotImplementedError("Model '%s' is not supported!" % model)
-        return Breezer(btle_device)
+
+        tion = Breezer(btle_device)
+        tion.set_ble_device_callback(
+            lambda: bluetooth.async_ble_device_from_address(hass, mac, connectable=True)
+        )
+        return tion
+
+    @staticmethod
+    async def _async_close_probe(tion: Tion | None) -> None:
+        """Close a temporary config-flow connection without masking its result."""
+        if tion is not None:
+            with suppress(Exception):
+                await tion.reset_connection()
 
 
 class TionConfigFlow(TionFlow, config_entries.ConfigFlow, domain=DOMAIN):
     """Initial setup."""
     VERSION = 1
-    CONNECTION_CLASS = config_entries.CONN_CLASS_CLOUD_POLL
+    CONNECTION_CLASS = config_entries.CONN_CLASS_LOCAL_POLL
 
     def __init__(self):
         super().__init__()
@@ -144,12 +159,15 @@ class TionConfigFlow(TionFlow, config_entries.ConfigFlow, domain=DOMAIN):
             else:
                 _LOGGER.debug("Going create entry with name %s" % input['name'])
                 _LOGGER.debug(input)
+                _tion: Tion | None = None
                 try:
-                    _tion: Tion = self.getTion(input['model'], input['mac'])
-                    result = _tion.get()
+                    _tion = self.getTion(input['model'], input['mac'], self.hass)
+                    result = await _tion.get()
                 except Exception as e:
                     _LOGGER.error("Could not get data from breezer. result is %s, error: %s" % (result, str(e)))
                     return self.async_show_form(step_id='add_failed')
+                finally:
+                    await self._async_close_probe(_tion)
 
                 return await self._create_entry(title=input['name'], data=input, step="user")
 
@@ -159,9 +177,10 @@ class TionConfigFlow(TionFlow, config_entries.ConfigFlow, domain=DOMAIN):
         """Pair host and breezer"""
         _LOGGER.debug("Real pairing step")
         result = {}
+        _tion: Tion | None = None
         try:
             _LOGGER.debug(self._data)
-            _tion: Tion = self.getTion(self._data['model'], self._data['mac'])
+            _tion = self.getTion(self._data['model'], self._data['mac'], self.hass)
             await _tion.pair()
             # We should sleep a bit, because immediately connection will cause device disconnected exception while
             # enabling notifications
@@ -172,6 +191,8 @@ class TionConfigFlow(TionFlow, config_entries.ConfigFlow, domain=DOMAIN):
             _LOGGER.error("Cannot pair and get data. Data is %s, result is %s; %s: %s", self._data, result,
                           type(e).__name__, str(e))
             return self.async_show_form(step_id='pair_failed')
+        finally:
+            await self._async_close_probe(_tion)
 
         return await self._create_entry(title=self._data['name'], data=self._data, step="pair")
 

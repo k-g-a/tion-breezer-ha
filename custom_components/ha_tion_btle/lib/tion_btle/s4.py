@@ -11,11 +11,14 @@ else:
     from .tion import TionException
     from .light_family import TionLiteFamily
 
-logging.basicConfig(level=logging.DEBUG)
 _LOGGER = logging.getLogger(__name__)
 
 
 class TionS4(TionLiteFamily):
+    MIN_STATE_RESPONSE_SIZE = 31
+    ERROR_CODES = tuple(f"EC{code:02d}" for code in range(1, 12))
+    WARNING_CODES = tuple(f"WS{code:02d}" for code in range(1, 7))
+
     def __init__(self, mac: str | BLEDevice):
         super().__init__(mac)
 
@@ -39,6 +42,13 @@ class TionS4(TionLiteFamily):
 
     def _decode_response(self, response: bytearray):
         _LOGGER.debug("Data is %s", bytes(response).hex())
+        if len(response) < self.MIN_STATE_RESPONSE_SIZE:
+            raise TionException(
+                "s4 _decode_response",
+                f"Got invalid Tion 4S response: expected at least {self.MIN_STATE_RESPONSE_SIZE} bytes, "
+                f"got {len(response)}",
+            )
+
         try:
             self._mode = response[2]
             self._heater_temp = response[3]
@@ -50,6 +60,7 @@ class TionS4(TionLiteFamily):
             self._sound = response[0] >> 1 & 1
             self._light = response[0] >> 2 & 1
             self._heater = True if response[0] >> 4 & 1 == 0 else False
+            self._error_code = int.from_bytes(response[25:29], byteorder='little', signed=False)
         except IndexError as e:
             raise TionException(
                 "s4 _decode_response",
@@ -58,8 +69,27 @@ class TionS4(TionLiteFamily):
 
     def _generate_model_specific_json(self) -> dict:
         return {
-            "light": self.light
+            "light": self.light,
+            "active_error_codes": self.active_error_codes,
         }
+
+    @property
+    def active_error_codes(self) -> list[str]:
+        """Return active 4S errors and warnings encoded in the state bit mask."""
+        codes = [name for bit, name in enumerate(self.ERROR_CODES) if self._error_code & (1 << bit)]
+        codes.extend(
+            name for bit, name in enumerate(self.WARNING_CODES, start=24) if self._error_code & (1 << bit)
+        )
+        return codes
+
+    def _validate_state_before_write(self) -> None:
+        critical_errors = [code for code in self.active_error_codes if code.startswith("EC")]
+        if critical_errors:
+            raise TionException(
+                "s4 set",
+                "Refusing to change Tion 4S state while the device reports critical error(s): "
+                + ", ".join(critical_errors),
+            )
 
     def _encode_request(self, request: dict) -> bytearray:
         def encode_state() -> int:
