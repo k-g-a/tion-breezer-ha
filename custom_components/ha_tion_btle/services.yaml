@@ -2,7 +2,8 @@ set_air_source:
   name: Air source
   description: Set air source
   target:
-    device:
+    entity:
+      domain: climate
       integration: ha_tion_btle
   fields:
     source:
