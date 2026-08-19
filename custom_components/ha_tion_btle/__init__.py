@@ -9,7 +9,6 @@ from datetime import timedelta
 from functools import cached_property
 
 from bleak.backends.device import BLEDevice
-from bleak_retry_connector import close_stale_connections_by_address
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import BluetoothCallbackMatcher
 from homeassistant.config_entries import ConfigEntry
@@ -18,7 +17,6 @@ from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from . import tion_btle
-from .bluetooth_lifecycle import guard_connection_slot, reconcile_connection_slot
 from .const import CONF_AWAY_TEMP, CONF_KEEP_ALIVE, CONF_MAC, DOMAIN, PLATFORMS, TION_SCHEMA
 from .tion_btle.tion import MaxTriesExceededError, Tion
 
@@ -29,10 +27,6 @@ async def async_setup_entry(hass, config_entry: ConfigEntry):
     _LOGGER.info("Setting up %s ", config_entry.unique_id)
 
     hass.data.setdefault(DOMAIN, {})
-
-    # Adopt the startup cleanup used by maintained HA BLE integrations.  It
-    # recovers a connection left behind by an interrupted reload/restart.
-    await close_stale_connections_by_address(config_entry.data[CONF_MAC])
 
     instance = TionInstance(hass, config_entry)
     hass.data[DOMAIN][config_entry.unique_id] = instance
@@ -85,7 +79,11 @@ class TionInstance(DataUpdateCoordinator):
         self._operation_lock = asyncio.Lock()
 
         self.__tion: Tion = self.getTion(self.model, btle_device)
-        self.__tion.configure_connection_lifecycle(guard_connection_slot, reconcile_connection_slot)
+        mac_address = self.config[CONF_MAC]
+        self.__tion.set_ble_device_callback(
+            lambda: bluetooth.async_ble_device_from_address(hass, mac_address, connectable=True)
+        )
+        _LOGGER.debug("Using bundled Tion BLE implementation from %s", tion_btle.__file__)
         self.__keep_alive = datetime.timedelta(seconds=self.__keep_alive)
         self.rssi: int = 0
 
