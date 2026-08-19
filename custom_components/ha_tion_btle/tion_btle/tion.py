@@ -403,7 +403,11 @@ class Tion:
         )
         self.__notifications_enabled = False
         try:
-            if client is not None and client.is_connected:
+            if client is not None:
+                # Always call disconnect when a client object exists.  A BLE
+                # peripheral may have already dropped the link, making
+                # is_connected false while the backend still owns transport
+                # resources that only disconnect() closes.
                 await client.disconnect()
         except Exception as err:
             _LOGGER.warning("Error while disconnecting from %s: %s", self.mac, err)

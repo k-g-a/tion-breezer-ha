@@ -22,6 +22,7 @@ def _device() -> BLEDevice:
 def test_guard_fails_fast_when_selected_adapter_is_full(monkeypatch):
     manager = Mock()
     manager.async_current_allocations.return_value = [Allocation("hci0", 1, 0, ("11:22:33:44:55:66",))]
+    manager.async_scanner_devices_by_address.return_value = []
     monkeypatch.setattr(lifecycle, "get_manager", lambda: manager)
 
     with pytest.raises(BleakOutOfConnectionSlotsError):
@@ -33,6 +34,7 @@ def test_guard_fails_fast_when_selected_adapter_is_full(monkeypatch):
 def test_guard_allows_existing_allocation_for_same_device(monkeypatch):
     manager = Mock()
     manager.async_current_allocations.return_value = [Allocation("hci0", 1, 0, ("aa:bb:cc:dd:ee:ff",))]
+    manager.async_scanner_devices_by_address.return_value = []
     monkeypatch.setattr(lifecycle, "get_manager", lambda: manager)
 
     lifecycle.guard_connection_slot(_device())

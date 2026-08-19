@@ -91,6 +91,19 @@ async def test_reset_connection_clears_client_and_buffer(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_disconnect_closes_backend_when_client_reports_disconnected():
+    breezer = TionS4("AA:BB:CC:DD:EE:FF")
+    client = AsyncMock()
+    client.is_connected = False
+    breezer._btle = client
+
+    await breezer._disconnect()
+
+    client.disconnect.assert_awaited_once()
+    assert breezer._btle is None
+
+
+@pytest.mark.asyncio
 async def test_disconnect_callback_sees_current_client_and_reconciles(monkeypatch):
     device = BLEDevice("AA:BB:CC:DD:EE:FF", "Tion", {"path": "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF"})
     breezer = TionS4(device)

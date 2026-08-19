@@ -80,10 +80,56 @@ def _log_allocations(stage: str, device: BLEDevice, allocations: list[Any]) -> N
         )
 
 
+def _log_connection_candidates(manager: Any, device: BLEDevice) -> None:
+    """Log the scanner paths considered by HA's Bleak client wrapper."""
+    try:
+        candidates = list(manager.async_scanner_devices_by_address(device.address, True) or [])
+        _LOGGER.debug(
+            "BLE connection candidates: address=%s count=%s",
+            device.address,
+            len(candidates),
+        )
+        for candidate in candidates:
+            scanner = candidate.scanner
+            connector = getattr(scanner, "connector", None)
+            connector_can_connect: bool | None = None
+            if connector is not None:
+                connector_can_connect = connector.can_connect()
+            scanner_allocations = scanner.get_allocations()
+            allocation_summary = (
+                _allocation_fields(scanner_allocations) if scanner_allocations is not None else None
+            )
+            _LOGGER.debug(
+                "BLE connection candidate: address=%s scanner=%s scanner_type=%s "
+                "source=%s adapter=%s connectable=%s scanning=%s rssi=%s "
+                "connector=%s connector_can_connect=%s allocations=%s",
+                device.address,
+                getattr(scanner, "name", None),
+                type(scanner).__name__,
+                getattr(scanner, "source", None),
+                getattr(scanner, "adapter", None),
+                getattr(scanner, "connectable", None),
+                getattr(scanner, "scanning", None),
+                getattr(candidate.advertisement, "rssi", None),
+                type(getattr(connector, "client", None)).__name__ if connector is not None else None,
+                connector_can_connect,
+                allocation_summary,
+            )
+    except Exception:
+        # Diagnostics must never prevent a connection attempt.
+        _LOGGER.debug(
+            "Could not inspect BLE connection candidates for %s",
+            device.address,
+            exc_info=True,
+        )
+
+
 def guard_connection_slot(device: BLEDevice) -> None:
     """Log slot state and fail immediately when the selected source is full."""
-    _, allocations = _allocation_snapshot(device)
+    manager, allocations = _allocation_snapshot(device)
     _log_allocations("before-connect", device, allocations)
+    if manager is not None:
+        _log_connection_candidates(manager, device)
     target = device.address.upper()
 
     for allocation in allocations:
