@@ -14,6 +14,7 @@ dependencies = [
 
 [project.optional-dependencies]
 test = [
+  "habluetooth>=6.0",
   "pytest>=8",
   "pytest-asyncio>=0.23",
   "ruff>=0.12",
