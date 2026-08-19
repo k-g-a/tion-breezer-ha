@@ -2,7 +2,7 @@
 
 A standalone custom integration for controlling Tion S3, S4, and Lite breezers over Bluetooth.
 
-This project combines the Home Assistant integration and its Bluetooth protocol library in one repository. The library is vendored under `custom_components/ha_tion_btle/tion_btle`, so installation does not depend on a separately published `tion-btle` package.
+This project combines the Home Assistant integration and its Bluetooth protocol library in one repository. The library is vendored under `custom_components/ha_tion_btle/lib/tion_btle`, so installation does not depend on a separately published `tion-btle` package.
 
 ## Status
 
@@ -11,15 +11,15 @@ The initial version is intended for local testing on Home Assistant 2025.6 or ne
 The BLE reliability changes include:
 
 - Home Assistant-compatible connections through `bleak-retry-connector`;
-- fresh `BLEDevice` data from Home Assistant for reconnects and Bluetooth proxies;
+- one persistent BLE connection per breezer, with fresh `BLEDevice` data from Home Assistant when reconnection is needed;
 - cleanup after failed or unexpected connections;
-- protected connection bookkeeping;
+- serialized polling and commands on the shared notification stream;
+- no replay of writes whose transport result is ambiguous;
 - a five-second upper bound while waiting for protocol data;
-- serialized polling and commands per breezer;
 - removal of nested connect/disconnect calls in climate commands;
 - a one-minute retry interval after a failed poll instead of ten minutes.
 
-Connections remain operation-scoped. Home Assistant explicitly recommends not reusing a `BleakClient` between connections, and retaining one connection per breezer would consume scarce adapter connection slots in multi-device installations.
+The persistent connection is intentional. Testing with this breezer showed that repeated connect/disconnect cycles eventually left Home Assistant unable to select a usable Bluetooth backend even while advertisements continued and the global slot counter reported free capacity. Reusing the successful connection avoids that failure path. The trade-off is that the official Tion app or another BLE controller generally cannot connect until this integration is unloaded or Home Assistant is stopped.
 
 ## Manual installation
 
@@ -39,10 +39,10 @@ logger:
   default: warning
   logs:
     custom_components.ha_tion_btle: debug
-    custom_components.ha_tion_btle.tion_btle.tion: debug
-    custom_components.ha_tion_btle.tion_btle.s3: debug
-    custom_components.ha_tion_btle.tion_btle.s4: debug
-    custom_components.ha_tion_btle.tion_btle.lite: debug
+    custom_components.ha_tion_btle.lib.tion_btle.tion: debug
+    custom_components.ha_tion_btle.lib.tion_btle.s3: debug
+    custom_components.ha_tion_btle.lib.tion_btle.s4: debug
+    custom_components.ha_tion_btle.lib.tion_btle.lite: debug
 ```
 
 ## Development

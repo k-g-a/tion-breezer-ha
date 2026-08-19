@@ -1,18 +1,18 @@
 {
   "domain": "ha_tion_btle",
   "name": "Tion breezer",
-  "documentation": "https://github.com/TionAPI/HA-tion/wiki",
-  "dependencies": [
-    "bluetooth",
-    "fan"
-  ],
-  "requirements": [
-    "tion-btle==3.3.6",
-    "bleak-retry-connector>=2.0.0"
-  ],
   "codeowners": [
-    "@IATkachenko"
+    "@k-g-a"
   ],
   "config_flow": true,
-  "version": "v4.3.0"
+  "dependencies": [
+    "bluetooth",
+    "bluetooth_adapters"
+  ],
+  "documentation": "https://github.com/k-g-a/tion-breezer-ha#readme",
+  "integration_type": "device",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/k-g-a/tion-breezer-ha/issues",
+  "requirements": [],
+  "version": "0.1.0"
 }

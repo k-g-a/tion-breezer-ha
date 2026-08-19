@@ -273,15 +273,21 @@ class Tion:
 
             merged_settings = {**current_settings, **new_settings}
 
+            self._validate_state_before_write()
             encoded_request = self._encode_request(merged_settings)
             _LOGGER.debug("Will write %s", encoded_request)
             await self._send_request(encoded_request)
-            self._set_internal_state_from_request(new_settings)
-            await self._get_data_from_breezer()
+            response = await self._get_data_from_breezer()
+            # The device response, not the requested values, is the source of
+            # truth.  This also refreshes the error mask after every command.
+            self._decode_response(response)
         except Exception:
             # Error: force cleanup so the BLE slot is released
             await self.reset_connection()
             raise
+
+    def _validate_state_before_write(self) -> None:
+        """Validate cached device state before a write (model hook)."""
 
     @final
     @property
@@ -349,6 +355,7 @@ class Tion:
         - GATT service caching for faster reconnections
         """
         if self._client is not None and self._client.is_connected:
+            _LOGGER.debug("Reusing persistent BLE connection to %s", self.mac)
             return self._client
 
         if self._ble_device_callback is None:
@@ -417,13 +424,12 @@ class Tion:
     # ============================================================
 
     @final
-    @retry(retries=3)
     async def _try_write(self, request: bytearray):
         # SECURITY: Do NOT call _ensure_client() here!
         # _ensure_client() creates BLE connections via establish_connection(),
         # which must ONLY be called from _connect() (under semaphore).
-        # If client is disconnected, raise TionException (not caught by @retry)
-        # instead of BleakError (which would be retried uselessly).
+        # Never retry a GATT write: after a transport error we cannot know
+        # whether the breezer applied the command. Replaying it is unsafe.
         if self._client is None or not self._client.is_connected:
             _LOGGER.warning("_try_write called but BLE not connected")
             raise TionException("_try_write", "BLE not connected")
@@ -655,6 +661,8 @@ class Tion:
         self._client = None
         self.__notifications_enabled = False
         self.have_breezer_state = False
+        while self._delegation.haveNewData:
+            _LOGGER.debug("Discarding buffered notification during reset: %s", self._delegation.data)
 
     @final
     async def disconnect(self):

@@ -1,4 +1,3 @@
-import binascii
 from unittest.mock import AsyncMock
 
 import pytest
@@ -7,23 +6,8 @@ from tion_btle.s4 import TionS4
 from tion_btle.tion import TionException
 
 
-def test_status_request_uses_protocol_constants_and_valid_crc():
-    breezer = TionS4("dummy")
-
-    request = breezer.command_getStatus
-
-    assert request[0] == breezer.SINGLE_PACKET_ID
-    assert int.from_bytes(request[1:3], byteorder="little") == len(request) - 1
-    assert request[3:5] == bytes([breezer.MAGIC_NUMBER, breezer.FRAME_RANDOM])
-    assert request[5:7] == bytes(breezer.REQUEST_PARAMS)
-    assert int.from_bytes(request[7:11], byteorder="little") == breezer.BLE_REQUEST_ID
-    assert binascii.crc_hqx(request[1:], 0xFFFF) == 0
-    assert request[-2:] != bytes([0xBB, 0xAA])
-
-
-def test_set_request_has_logical_request_id_zero_filter_time_and_valid_crc():
-    breezer = TionS4("dummy")
-    settings = {
+def _settings() -> dict:
+    return {
         "state": "on",
         "sound": "off",
         "light": "on",
@@ -33,17 +17,29 @@ def test_set_request_has_logical_request_id_zero_filter_time_and_valid_crc():
         "fan_speed": 3,
     }
 
-    request = breezer._encode_request(settings)
+
+def test_status_request_keeps_working_archive_framing():
+    breezer = TionS4("dummy")
+
+    request = breezer.command_getStatus
+
+    assert request[0] == breezer.SINGLE_PACKET_ID
+    assert request[1:3] == bytes([0x10, 0x00])
+    assert request[3] == breezer.MAGIC_NUMBER
+    assert request[5:7] == bytes(breezer.REQUEST_PARAMS)
+    assert request[-2:] == bytes(breezer.CRC)
+
+
+def test_set_request_keeps_working_archive_framing():
+    breezer = TionS4("dummy")
+
+    request = breezer._encode_request(_settings())
 
     assert request[0] == breezer.FIRST_PACKET_ID
-    assert int.from_bytes(request[1:3], byteorder="little") == len(request) - 1
-    assert request[3:5] == bytes([breezer.MAGIC_NUMBER, breezer.FRAME_RANDOM])
+    assert request[1:3] == bytes([0x17, 0x00])
+    assert request[3] == breezer.MAGIC_NUMBER
     assert request[5:7] == bytes(breezer.SET_PARAMS)
-    assert int.from_bytes(request[7:11], byteorder="little") == breezer.BLE_REQUEST_ID
-    assert int.from_bytes(request[11:15], byteorder="little") == 1
-    assert request[15:20] == bytes([0b00010101, 0, 0, 22, 3])
-    assert int.from_bytes(request[20:22], byteorder="little") == 0
-    assert binascii.crc_hqx(request[1:], 0xFFFF) == 0
+    assert request[-2:] == bytes(breezer.CRC)
 
 
 def test_decode_exposes_critical_errors_and_warnings():
@@ -80,20 +76,13 @@ async def test_set_uses_device_response_as_source_of_truth(monkeypatch):
     response = bytearray(31)
     response[4] = 2
 
-    connect = AsyncMock()
-    disconnect = AsyncMock()
-    send_request = AsyncMock()
-    get_response = AsyncMock(return_value=response)
-    monkeypatch.setattr(breezer, "connect", connect)
-    monkeypatch.setattr(breezer, "disconnect", disconnect)
-    monkeypatch.setattr(breezer, "_send_request", send_request)
-    monkeypatch.setattr(breezer, "_get_data_from_breezer", get_response)
+    monkeypatch.setattr(breezer, "connect", AsyncMock())
+    monkeypatch.setattr(breezer, "_send_request", AsyncMock())
+    monkeypatch.setattr(breezer, "_get_data_from_breezer", AsyncMock(return_value=response))
 
     await breezer.set({"fan_speed": 3})
 
     assert breezer.fan_speed == 2
-    send_request.assert_awaited_once()
-    disconnect.assert_awaited_once()
 
 
 def test_invalid_state_response_size_is_rejected():

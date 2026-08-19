@@ -1,37 +1,26 @@
-"""The Tion breezer component — refactored for HA BLE API."""
+"""The Tion breezer component."""
 from __future__ import annotations
 
-import os
-import sys
-
-# Use local modified tion_btle from lib/ instead of pip-installed version.
-# This is necessary on HA OS where the pip package filesystem is not accessible.
-_local_lib = os.path.join(os.path.dirname(__file__), "lib")
-if _local_lib not in sys.path:
-    sys.path.insert(0, _local_lib)
-
-from bleak.backends.device import BLEDevice
+import asyncio
 import datetime
 import logging
 import math
 from datetime import timedelta
 from functools import cached_property
 
-import tion_btle
+from bleak.backends.device import BLEDevice
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import BluetoothCallbackMatcher
-from homeassistant.exceptions import ConfigEntryNotReady
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-from tion_btle.tion import Tion, MaxTriesExceededError
-from .const import DOMAIN, TION_SCHEMA, CONF_KEEP_ALIVE, CONF_AWAY_TEMP, CONF_MAC, PLATFORMS
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+
+from .const import CONF_AWAY_TEMP, CONF_KEEP_ALIVE, CONF_MAC, DOMAIN, PLATFORMS, TION_SCHEMA
+from .lib import tion_btle
+from .lib.tion_btle.tion import MaxTriesExceededError, Tion
 
 _LOGGER = logging.getLogger(__name__)
-
-
-async def async_setup(hass, config):
-    return True
 
 
 async def async_setup_entry(hass, config_entry: ConfigEntry):
@@ -56,6 +45,18 @@ async def async_setup_entry(hass, config_entry: ConfigEntry):
     return True
 
 
+async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
+    """Unload an entry and release its persistent BLE connection."""
+    unloaded = await hass.config_entries.async_unload_platforms(config_entry, PLATFORMS)
+    if not unloaded:
+        return False
+
+    instance: TionInstance | None = hass.data.get(DOMAIN, {}).pop(config_entry.unique_id, None)
+    if instance is not None:
+        await instance.async_shutdown()
+    return True
+
+
 class TionInstance(DataUpdateCoordinator):
     def __init__(self, hass: HomeAssistant, config_entry: ConfigEntry):
 
@@ -73,23 +74,21 @@ class TionInstance(DataUpdateCoordinator):
         except KeyError:
             pass
 
-        # delay before next update if we got btle.BTLEDisconnectError
-        self._delay: int = 300
+        self._failure_count = 0
+        self._failure_backoff = (5, 15, 60, 120, 300)
+        # A persistent connection has one notification stream.  Keep every
+        # request and its response together so polls and service calls cannot
+        # consume each other's frames.
+        self._operation_lock = asyncio.Lock()
 
         self.__tion: Tion = self.getTion(self.model, btle_device)
 
-        # --- REFACTORED: Set ble_device_callback for establish_connection ---
-        # This callback returns a fresh BLEDevice from HA Bluetooth API.
-        # HA may switch BLE adapters/proxies between calls, so we must
-        # resolve the device on every connection attempt.
         mac_address = self.config[CONF_MAC]
         self.__tion.set_ble_device_callback(
             lambda: bluetooth.async_ble_device_from_address(hass, mac_address, connectable=True)
         )
-        # --- END REFACTORED ---
 
         self.__keep_alive = datetime.timedelta(seconds=self.__keep_alive)
-        self._delay = datetime.timedelta(seconds=self._delay)
         self.rssi: int = 0
 
         if self._config_entry.unique_id is None:
@@ -132,26 +131,22 @@ class TionInstance(DataUpdateCoordinator):
         response: dict[str, str | bool | int] = {}
 
         try:
-            response = await self.__tion.get()
-            self.update_interval = self.__keep_alive
+            async with self._operation_lock:
+                response = await self.__tion.get()
+            self._record_success()
 
         except MaxTriesExceededError as e:
-            _LOGGER.warning("Got MaxTriesExceededError: %s. Will retry sooner.", str(e))
-            # Force cleanup: release BLE slot and reset all state
-            try:
+            delay = self._record_failure()
+            _LOGGER.warning("BLE retry limit exceeded; delaying the next poll by %s seconds", delay)
+            async with self._operation_lock:
                 await self.__tion.reset_connection()
-            except Exception:
-                pass
-            self.update_interval = self._delay
-            raise UpdateFailed("MaxTriesExceededError")
+            raise UpdateFailed("Could not connect to the Tion breezer") from e
         except Exception as e:
-            _LOGGER.critical(f"{response=}, {e=}")
-            # Force cleanup on any error
-            try:
+            delay = self._record_failure()
+            _LOGGER.warning("Tion update failed: %s; delaying the next poll by %s seconds", e, delay)
+            async with self._operation_lock:
                 await self.__tion.reset_connection()
-            except Exception:
-                pass
-            raise e
+            raise UpdateFailed(f"Tion update failed: {e}") from e
 
         response["is_on"]: bool = self._decode_state(response["state"])
         response["heater"]: bool = self._decode_state(response["heater"])
@@ -181,27 +176,45 @@ class TionInstance(DataUpdateCoordinator):
 
         args = ', '.join('%s=%r' % x for x in kwargs.items())
         _LOGGER.info("Need to set: " + args)
-        await self.__tion.set(kwargs)
-        self.data.update(original_args)
-        self.async_update_listeners()
+        try:
+            async with self._operation_lock:
+                await self.__tion.set(kwargs)
+            self._record_success()
+            self.data.update(original_args)
+            self.async_update_listeners()
+        except Exception as e:
+            delay = self._record_failure()
+            _LOGGER.warning("Tion set failed: %s; delaying the next poll by %s seconds", e, delay)
+            async with self._operation_lock:
+                await self.__tion.reset_connection()
+            raise UpdateFailed(f"Tion set failed: {e}") from e
+
+    def _record_success(self) -> None:
+        self._failure_count = 0
+        self.update_interval = self.__keep_alive
+
+    def _record_failure(self) -> int:
+        delay = self._failure_backoff[min(self._failure_count, len(self._failure_backoff) - 1)]
+        self._failure_count += 1
+        self.update_interval = datetime.timedelta(seconds=delay)
+        return delay
 
     @staticmethod
     def getTion(model: str, mac: str | BLEDevice) -> tion_btle.TionS3 | tion_btle.TionLite | tion_btle.TionS4:
         if model == 'S3':
-            from tion_btle.s3 import TionS3 as Breezer
+            from .lib.tion_btle.s3 import TionS3 as Breezer
         elif model == 'S4':
-            from tion_btle.s4 import TionS4 as Breezer
+            from .lib.tion_btle.s4 import TionS4 as Breezer
         elif model == 'Lite':
-            from tion_btle.lite import TionLite as Breezer
+            from .lib.tion_btle.lite import TionLite as Breezer
         else:
             raise NotImplementedError("Model '%s' is not supported!" % model)
         return Breezer(mac)
 
-    async def connect(self):
-        return await self.__tion.connect()
-
-    async def disconnect(self):
-        return await self.__tion.disconnect()
+    async def async_shutdown(self) -> None:
+        """Release the persistent BLE connection owned by this entry."""
+        async with self._operation_lock:
+            await self.__tion.reset_connection()
 
     @property
     def device_info(self):
