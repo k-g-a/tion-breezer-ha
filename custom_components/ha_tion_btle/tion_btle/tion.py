@@ -5,6 +5,7 @@ import asyncio
 import inspect
 import logging
 from asyncio import Semaphore
+from collections.abc import Awaitable
 from typing import Callable, List, final
 from time import localtime, strftime
 
@@ -85,6 +86,9 @@ class Tion:
         self._ble_device: BLEDevice | str = mac
         self._btle: BleakClientWithServiceCache | None = None
         self._next_btle_device: BLEDevice | str | None = None
+        self._active_ble_device: BLEDevice | None = None
+        self._connection_guard: Callable[[BLEDevice], None] | None = None
+        self._disconnect_reconciler: Callable[[BLEDevice], Awaitable[None]] | None = None
         self._delegation = TionDelegation()
         self._fan_speed = 0
         self._model: str = self.__class__.__name__
@@ -106,6 +110,15 @@ class Tion:
         self.__notifications_enabled: bool = False
         self.have_breezer_state: bool = False
         self._semaphore = Semaphore(1)
+
+    def configure_connection_lifecycle(
+        self,
+        connection_guard: Callable[[BLEDevice], None] | None,
+        disconnect_reconciler: Callable[[BLEDevice], Awaitable[None]] | None,
+    ) -> None:
+        """Install optional host-specific BLE slot lifecycle hooks."""
+        self._connection_guard = connection_guard
+        self._disconnect_reconciler = disconnect_reconciler
 
     @abc.abstractmethod
     async def _send_request(self, request: bytearray):
@@ -306,28 +319,56 @@ class Tion:
         device = self._next_btle_device if self._next_btle_device is not None else self._ble_device
 
         def _on_disconnect(client: BleakClientWithServiceCache) -> None:
-            if self._btle is client:
-                _LOGGER.debug("BLE device disconnected callback fired")
+            is_current = self._btle is client
+            _LOGGER.debug(
+                "BLE disconnected callback: address=%s client_id=%s current_client_id=%s is_current=%s",
+                self.mac,
+                id(client),
+                id(self._btle) if self._btle is not None else None,
+                is_current,
+            )
+            if is_current:
                 self.have_breezer_state = False
                 self._btle = None
 
         if isinstance(device, BLEDevice):
-            self._btle = await establish_connection(
-                BleakClientWithServiceCache,
-                device,
-                device.name or self.mac,
-                disconnected_callback=_on_disconnect,
-                use_services_cache=True,
-                max_attempts=3,
-                ble_device_callback=lambda: self._ble_device
-                if isinstance(self._ble_device, BLEDevice) else None,
-            )
+            if self._connection_guard is not None:
+                self._connection_guard(device)
+            self._active_ble_device = device
+            try:
+                client = await establish_connection(
+                    BleakClientWithServiceCache,
+                    device,
+                    device.name or self.mac,
+                    disconnected_callback=_on_disconnect,
+                    use_services_cache=True,
+                    max_attempts=3,
+                    ble_device_callback=lambda: self._ble_device
+                    if isinstance(self._ble_device, BLEDevice) else None,
+                )
+            except Exception:
+                _LOGGER.debug(
+                    "BLE connection failed: address=%s path=%s",
+                    device.address,
+                    device.details.get("path") if isinstance(device.details, dict) else None,
+                    exc_info=True,
+                )
+                raise
+            self._btle = client
         else:
             # fallback for plain MAC string (no HA integration)
             self._btle = BleakClientWithServiceCache(device, disconnected_callback=_on_disconnect)
             await self._btle.connect()
 
         self._next_btle_device = None
+        _LOGGER.debug(
+            "BLE connection established: address=%s client_id=%s path=%s",
+            self.mac,
+            id(self._btle),
+            self._active_ble_device.details.get("path")
+            if self._active_ble_device is not None and isinstance(self._active_ble_device.details, dict)
+            else None,
+        )
         return self._btle.is_connected
 
     @final
@@ -350,16 +391,44 @@ class Tion:
 
     @final
     async def _disconnect(self):
-        _LOGGER.debug(f"Disconnecting. {self.connection_status=}.")
         client = self._btle
-        self._btle = None
+        device = self._active_ble_device
+        _LOGGER.debug(
+            "Disconnecting: address=%s status=%s client_id=%s client_connected=%s path=%s",
+            self.mac,
+            self.connection_status,
+            id(client) if client is not None else None,
+            client.is_connected if client is not None else None,
+            device.details.get("path") if device is not None and isinstance(device.details, dict) else None,
+        )
         self.__notifications_enabled = False
-        if client is not None and client.is_connected:
-            try:
+        try:
+            if client is not None and client.is_connected:
                 await client.disconnect()
+        except Exception as err:
+            _LOGGER.warning("Error while disconnecting from %s: %s", self.mac, err)
+        finally:
+            # Keep the client installed until disconnect() has had a chance to
+            # invoke its callback.  Clearing it before the await made every
+            # expected callback look stale and hid the real BlueZ state.
+            if self._btle is client:
+                self._btle = None
+            if self._active_ble_device is device:
+                self._active_ble_device = None
+
+        if device is not None and self._disconnect_reconciler is not None:
+            try:
+                await self._disconnect_reconciler(device)
             except Exception as err:
-                _LOGGER.warning("Error while disconnecting from %s: %s", self.mac, err)
-        _LOGGER.debug(f"_disconnect done. {self.connection_status=}")
+                # Slot diagnostics/reconciliation must never turn a successful
+                # protocol transaction into a failed one.
+                _LOGGER.warning("Error while reconciling BLE slot for %s: %s", self.mac, err)
+        _LOGGER.debug(
+            "Disconnect complete: address=%s status=%s client_id=%s",
+            self.mac,
+            self.connection_status,
+            id(client) if client is not None else None,
+        )
 
     @final
     async def _try_write(self, request: bytearray):
