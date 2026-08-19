@@ -88,3 +88,45 @@ async def test_reset_connection_clears_client_and_buffer(monkeypatch):
     assert breezer._btle is None
     assert not breezer.have_breezer_state
     assert not breezer._delegation.haveNewData
+
+
+@pytest.mark.asyncio
+async def test_disconnect_callback_sees_current_client_and_reconciles(monkeypatch):
+    device = BLEDevice("AA:BB:CC:DD:EE:FF", "Tion", {"path": "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF"})
+    breezer = TionS4(device)
+    client = AsyncMock()
+    client.is_connected = True
+    establish_connection = AsyncMock(return_value=client)
+    reconciler = AsyncMock()
+    breezer.configure_connection_lifecycle(None, reconciler)
+    monkeypatch.setattr(tion_module, "establish_connection", establish_connection)
+
+    await breezer._try_connect()
+    callback = establish_connection.await_args.kwargs["disconnected_callback"]
+
+    async def disconnect() -> None:
+        assert breezer._btle is client
+        callback(client)
+
+    client.disconnect.side_effect = disconnect
+    await breezer._disconnect()
+
+    client.disconnect.assert_awaited_once()
+    reconciler.assert_awaited_once_with(device)
+    assert breezer._btle is None
+
+
+@pytest.mark.asyncio
+async def test_failed_connect_reconciles_selected_device(monkeypatch):
+    device = BLEDevice("AA:BB:CC:DD:EE:FF", "Tion", {"path": "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF"})
+    breezer = TionS4(device)
+    establish_connection = AsyncMock(side_effect=exc.BleakError("not reachable"))
+    reconciler = AsyncMock()
+    breezer.configure_connection_lifecycle(None, reconciler)
+    monkeypatch.setattr(tion_module, "establish_connection", establish_connection)
+
+    with pytest.raises(exc.BleakError):
+        await breezer._connect()
+
+    reconciler.assert_awaited_once_with(device)
+    assert breezer._btle is None
