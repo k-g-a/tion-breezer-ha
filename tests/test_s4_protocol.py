@@ -93,7 +93,7 @@ async def test_set_uses_device_response_as_source_of_truth(monkeypatch):
 
     assert breezer.fan_speed == 2
     send_request.assert_awaited_once()
-    disconnect.assert_awaited_once()
+    disconnect.assert_not_awaited()
 
 
 def test_invalid_state_response_size_is_rejected():

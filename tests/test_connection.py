@@ -10,8 +10,10 @@ from tion_btle.s4 import TionS4
 
 @pytest.mark.asyncio
 async def test_connect_uses_retry_connector_and_latest_ble_device(monkeypatch):
-    device = BLEDevice("AA:BB:CC:DD:EE:FF", "Tion", {})
-    breezer = TionS4(device)
+    initial_device = BLEDevice("AA:BB:CC:DD:EE:FF", "Tion", {"source": "old"})
+    latest_device = BLEDevice("AA:BB:CC:DD:EE:FF", "Tion", {"source": "new"})
+    breezer = TionS4(initial_device)
+    breezer.set_ble_device_callback(lambda: latest_device)
     client = Mock(is_connected=True)
     establish_connection = AsyncMock(return_value=client)
     monkeypatch.setattr(tion_module, "establish_connection", establish_connection)
@@ -20,7 +22,8 @@ async def test_connect_uses_retry_connector_and_latest_ble_device(monkeypatch):
 
     callback = establish_connection.await_args.kwargs["disconnected_callback"]
     device_callback = establish_connection.await_args.kwargs["ble_device_callback"]
-    assert device_callback() is device
+    assert establish_connection.await_args.args[1] is latest_device
+    assert device_callback() is latest_device
     assert establish_connection.await_args.kwargs["max_attempts"] == 3
 
     callback(Mock())
@@ -58,7 +61,7 @@ async def test_failed_write_is_not_replayed():
 
 
 @pytest.mark.asyncio
-async def test_failed_connect_does_not_poison_connection_count(monkeypatch):
+async def test_failed_connect_allows_a_later_retry(monkeypatch):
     breezer = TionS4("AA:BB:CC:DD:EE:FF")
     connect = AsyncMock(side_effect=exc.BleakError("not reachable"))
     monkeypatch.setattr(breezer, "_connect", connect)
@@ -71,6 +74,25 @@ async def test_failed_connect_does_not_poison_connection_count(monkeypatch):
     await breezer.connect()
 
     connect.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_successful_requests_reuse_persistent_connection(monkeypatch):
+    device = BLEDevice("AA:BB:CC:DD:EE:FF", "Tion", {})
+    breezer = TionS4(device)
+    client = AsyncMock()
+    client.is_connected = True
+    establish_connection = AsyncMock(return_value=client)
+    monkeypatch.setattr(tion_module, "establish_connection", establish_connection)
+    monkeypatch.setattr(breezer, "_try_write", AsyncMock())
+    monkeypatch.setattr(breezer, "_get_data_from_breezer", AsyncMock(return_value=bytearray(31)))
+
+    await breezer.get()
+    await breezer.get()
+
+    establish_connection.assert_awaited_once()
+    client.start_notify.assert_awaited_once()
+    client.disconnect.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -91,14 +113,25 @@ async def test_reset_connection_clears_client_and_buffer(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_disconnect_callback_sees_current_client_and_reconciles(monkeypatch):
+async def test_disconnect_closes_backend_when_client_reports_disconnected():
+    breezer = TionS4("AA:BB:CC:DD:EE:FF")
+    client = AsyncMock()
+    client.is_connected = False
+    breezer._btle = client
+
+    await breezer._disconnect()
+
+    client.disconnect.assert_awaited_once()
+    assert breezer._btle is None
+
+
+@pytest.mark.asyncio
+async def test_disconnect_callback_only_clears_current_client(monkeypatch):
     device = BLEDevice("AA:BB:CC:DD:EE:FF", "Tion", {"path": "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF"})
     breezer = TionS4(device)
     client = AsyncMock()
     client.is_connected = True
     establish_connection = AsyncMock(return_value=client)
-    reconciler = AsyncMock()
-    breezer.configure_connection_lifecycle(None, reconciler)
     monkeypatch.setattr(tion_module, "establish_connection", establish_connection)
 
     await breezer._try_connect()
@@ -112,21 +145,4 @@ async def test_disconnect_callback_sees_current_client_and_reconciles(monkeypatc
     await breezer._disconnect()
 
     client.disconnect.assert_awaited_once()
-    reconciler.assert_awaited_once_with(device)
-    assert breezer._btle is None
-
-
-@pytest.mark.asyncio
-async def test_failed_connect_reconciles_selected_device(monkeypatch):
-    device = BLEDevice("AA:BB:CC:DD:EE:FF", "Tion", {"path": "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF"})
-    breezer = TionS4(device)
-    establish_connection = AsyncMock(side_effect=exc.BleakError("not reachable"))
-    reconciler = AsyncMock()
-    breezer.configure_connection_lifecycle(None, reconciler)
-    monkeypatch.setattr(tion_module, "establish_connection", establish_connection)
-
-    with pytest.raises(exc.BleakError):
-        await breezer._connect()
-
-    reconciler.assert_awaited_once_with(device)
     assert breezer._btle is None
