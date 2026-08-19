@@ -11,6 +11,7 @@ else:
     from .tion import TionException
     from .light_family import TionLiteFamily
 
+logging.basicConfig(level=logging.DEBUG)
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -42,7 +43,7 @@ class TionLite(TionLiteFamily):
     @property
     def SET_PARAMS(self) -> list:
         return [0x30, 0x12]
-
+    
     @property
     def REQUEST_DEVICE_INFO(self) -> list:
         return [0x09, TionLiteFamily.MIDDLE_PACKET_ID]

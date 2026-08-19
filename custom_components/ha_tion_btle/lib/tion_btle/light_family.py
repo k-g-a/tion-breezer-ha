@@ -12,6 +12,7 @@ if __package__ == "":
 else:
     from .tion import Tion
 
+logging.basicConfig(level=logging.DEBUG)
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -151,6 +152,7 @@ class TionLiteFamily(Tion):
         :return: bytearray of encoded request. result[0] will be overwritten in  self._send_request()
         """
         raise NotImplementedError()
+
     @abc.abstractmethod
     def _decode_response(self, response: bytearray):
         raise NotImplementedError()
@@ -179,3 +181,4 @@ class TionLiteFamily(Tion):
     def _packages(self) -> list:
         """Packages for tests"""
         raise NotImplementedError()
+

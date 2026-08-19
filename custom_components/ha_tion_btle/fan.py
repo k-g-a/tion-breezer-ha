@@ -18,6 +18,7 @@ from homeassistant.helpers.entity_registry import async_get as async_get_entity_
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import TionInstance
+from .climate import TionClimateEntity
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
@@ -40,12 +41,7 @@ async def async_setup_entry(hass: HomeAssistant, _config: ConfigEntry, async_add
 
 
 class TionFan(FanEntity, CoordinatorEntity):
-    _attr_supported_features = (
-        FanEntityFeature.PRESET_MODE
-        | FanEntityFeature.SET_SPEED
-        | FanEntityFeature.TURN_ON
-        | FanEntityFeature.TURN_OFF
-    )
+    _attr_supported_features = FanEntityFeature.PRESET_MODE | FanEntityFeature.SET_SPEED
     _attr_oscillating = False
     _attr_preset_modes = [PRESET_NONE, PRESET_BOOST]
     _attr_speed_count = 6  # Must be synced with TionClimateEntity._attr_fan_modes
@@ -76,19 +72,19 @@ class TionFan(FanEntity, CoordinatorEntity):
         pass
 
     def set_direction(self, direction: str) -> None:
-        raise NotImplementedError
+        raise NotImplemented
 
     def turn_on(self, percentage: int | None = None, preset_mode: str | None = None, **kwargs) -> None:
-        raise NotImplementedError
+        raise NotImplemented
 
     def oscillate(self, oscillating: bool) -> None:
-        raise NotImplementedError
+        raise NotImplemented
 
     def turn_off(self, **kwargs: Any) -> None:
         pass
 
     def set_percentage(self, percentage: int) -> None:
-        raise NotImplementedError
+        raise NotImplemented
 
     def __init__(self, description: FanEntityDescription, instance: TionInstance, hass: HomeAssistant):
         """Initialize the fan."""
@@ -125,7 +121,7 @@ class TionFan(FanEntity, CoordinatorEntity):
         except KeyError:
             _LOGGER.warning(f"Could not to convert {percentage} to mode with {self._percent_mode_mapping}. "
                             f"Will use fall back method.")
-            for i in range(self._attr_speed_count):
+            for i in range(len(TionClimateEntity.attr_fan_modes())):
                 if percentage < self.percentage_step * i:
                     break
                 else:
@@ -144,7 +140,7 @@ class TionFan(FanEntity, CoordinatorEntity):
 
     @cached_property
     def boost_fan_mode(self) -> int:
-        return self._attr_speed_count
+        return max(TionClimateEntity.attr_fan_modes())
 
     @property
     def fan_mode(self):
@@ -169,7 +165,7 @@ class TionFan(FanEntity, CoordinatorEntity):
         await self.coordinator.set(fan_speed=target_speed, is_on=True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        if self._saved_fan_mode is None and (self.fan_mode or 0) > 0:
+        if self._saved_fan_mode is None and self.fan_mode > 0:
             self._saved_fan_mode = self.fan_mode
 
         await self.coordinator.set(is_on=False)
@@ -179,3 +175,8 @@ class TionFan(FanEntity, CoordinatorEntity):
         self._attr_is_on = self.coordinator.data.get("is_on")
         self._attr_percentage = self.mode2percent() if self._attr_is_on else 0  # should check attr to avoid deadlock
         self.async_write_ha_state()
+
+    @property
+    def available(self) -> bool:
+        """Return if entity is available."""
+        return True
