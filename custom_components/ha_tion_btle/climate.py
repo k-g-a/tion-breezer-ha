@@ -249,7 +249,9 @@ class TionClimateEntity(ClimateEntity, CoordinatorEntity):
         self._attr_assumed_state = False if self.coordinator.last_update_success else True
         self._attr_extra_state_attributes = {
             'air_mode': self.coordinator.data.get("air_mode"),
-            'in_temp': self.coordinator.data.get("in_temp")
+            'in_temp': self.coordinator.data.get("in_temp"),
+            'active_error_codes': self.coordinator.data.get("active_error_codes", []),
+            'raw_error_code': self.coordinator.data.get("request_error_code", 0),
         }
         self._attr_hvac_mode = HVACMode.OFF if not self.coordinator.data.get("is_on") else \
             HVACMode.HEAT if self.coordinator.data.get("heater") else HVACMode.FAN_ONLY

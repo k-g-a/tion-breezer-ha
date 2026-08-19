@@ -69,6 +69,7 @@ class TionDelegation:
 
 class TionException(Exception):
     def __init__(self, expression, message):
+        super().__init__(message)
         self.expression = expression
         self.message = message
 
@@ -255,14 +256,19 @@ class Tion:
             current_settings.update(self._generate_model_specific_json())
 
             merged_settings = {**current_settings, **new_settings}
+            self._validate_state_before_write()
 
             encoded_request = self._encode_request(merged_settings)
             _LOGGER.debug("Will write %s", encoded_request)
             await self._send_request(encoded_request)
-            self._set_internal_state_from_request(new_settings)
-            await self._get_data_from_breezer()
+            raw = await self._get_data_from_breezer()
+            self._decode_response(raw)
+            self._validate_state_before_write()
         finally:
             await self.disconnect()
+
+    def _validate_state_before_write(self) -> None:
+        """Reject a write when a model reports a state that makes it unsafe."""
 
     @final
     @property
@@ -295,9 +301,8 @@ class Tion:
         return status
 
     @final
-    @retry(retries=1, delay=2)
     async def _try_connect(self) -> bool:
-        """Tries to connect with retries"""
+        """Connect once through bleak-retry-connector's bounded retry loop."""
         device = self._next_btle_device if self._next_btle_device is not None else self._ble_device
 
         def _on_disconnect(client: BleakClientWithServiceCache) -> None:
@@ -313,6 +318,7 @@ class Tion:
                 device.name or self.mac,
                 disconnected_callback=_on_disconnect,
                 use_services_cache=True,
+                max_attempts=3,
                 ble_device_callback=lambda: self._ble_device
                 if isinstance(self._ble_device, BLEDevice) else None,
             )
@@ -331,9 +337,8 @@ class Tion:
             try:
                 await self._try_connect()
             except Exception:
-                # _try_connect turns exhausted Bleak retries into
-                # MaxTriesExceededError, so cleanup must not be limited to
-                # BleakError here.
+                # Connector and protocol failures both require the same clean
+                # reconnect path, so cleanup must not be limited to BleakError.
                 await self.reset_connection()
                 raise
 
@@ -357,8 +362,8 @@ class Tion:
         _LOGGER.debug(f"_disconnect done. {self.connection_status=}")
 
     @final
-    @retry(retries=3)
     async def _try_write(self, request: bytearray):
+        """Write once; replaying a partially delivered multi-packet command is unsafe."""
         _LOGGER.debug(f"Writing {bytes(request).hex()} to {self.uuid_write}, {self.connection_status=}")
         if self._btle is None or not self._btle.is_connected:
             raise exc.BleakError(f"Tion breezer {self.mac} is not connected")

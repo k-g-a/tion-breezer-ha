@@ -21,12 +21,40 @@ async def test_connect_uses_retry_connector_and_latest_ble_device(monkeypatch):
     callback = establish_connection.await_args.kwargs["disconnected_callback"]
     device_callback = establish_connection.await_args.kwargs["ble_device_callback"]
     assert device_callback() is device
+    assert establish_connection.await_args.kwargs["max_attempts"] == 3
 
     callback(Mock())
     assert breezer._btle is client
 
     callback(client)
     assert breezer._btle is None
+
+
+@pytest.mark.asyncio
+async def test_failed_retry_connector_call_is_not_retried_again(monkeypatch):
+    device = BLEDevice("AA:BB:CC:DD:EE:FF", "Tion", {})
+    breezer = TionS4(device)
+    establish_connection = AsyncMock(side_effect=exc.BleakError("not reachable"))
+    monkeypatch.setattr(tion_module, "establish_connection", establish_connection)
+
+    with pytest.raises(exc.BleakError):
+        await breezer._try_connect()
+
+    establish_connection.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_failed_write_is_not_replayed():
+    breezer = TionS4("AA:BB:CC:DD:EE:FF")
+    client = AsyncMock()
+    client.is_connected = True
+    client.write_gatt_char.side_effect = exc.BleakError("write status unknown")
+    breezer._btle = client
+
+    with pytest.raises(exc.BleakError):
+        await breezer._try_write(bytearray(b"request"))
+
+    client.write_gatt_char.assert_awaited_once()
 
 
 @pytest.mark.asyncio
