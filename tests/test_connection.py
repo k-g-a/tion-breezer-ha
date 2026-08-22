@@ -77,7 +77,7 @@ async def test_failed_connect_allows_a_later_retry(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_successful_requests_reuse_persistent_connection(monkeypatch):
+async def test_multiple_requests_reuse_connection_until_session_cleanup(monkeypatch):
     device = BLEDevice("AA:BB:CC:DD:EE:FF", "Tion", {})
     breezer = TionS4(device)
     client = AsyncMock()
@@ -100,6 +100,11 @@ async def test_reset_connection_clears_client_and_buffer(monkeypatch):
     breezer = TionS4("AA:BB:CC:DD:EE:FF")
     client = AsyncMock()
     client.is_connected = True
+
+    async def disconnect() -> None:
+        client.is_connected = False
+
+    client.disconnect.side_effect = disconnect
     breezer._btle = client
     breezer.have_breezer_state = True
     breezer._delegation.handleNotification(1, bytearray(b"stale"))
@@ -139,10 +144,57 @@ async def test_disconnect_callback_only_clears_current_client(monkeypatch):
 
     async def disconnect() -> None:
         assert breezer._btle is client
+        client.is_connected = False
         callback(client)
 
     client.disconnect.side_effect = disconnect
     await breezer._disconnect()
+
+    client.disconnect.assert_awaited_once()
+    assert breezer._btle is None
+
+
+@pytest.mark.asyncio
+async def test_disconnect_stops_notifications_and_waits_for_bluez(monkeypatch):
+    device = BLEDevice(
+        "AA:BB:CC:DD:EE:FF",
+        "Tion",
+        {"path": "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF"},
+    )
+    breezer = TionS4(device)
+    client = AsyncMock()
+    client.is_connected = True
+    breezer._btle = client
+    breezer._active_ble_device = device
+    breezer._Tion__notifications_enabled = True
+    wait_for_disconnect = AsyncMock()
+    monkeypatch.setattr(tion_module, "wait_for_disconnect", wait_for_disconnect)
+
+    async def disconnect() -> None:
+        client.is_connected = False
+
+    client.disconnect.side_effect = disconnect
+
+    await breezer.disconnect()
+
+    client.stop_notify.assert_awaited_once_with(breezer.uuid_notify)
+    client.disconnect.assert_awaited_once()
+    wait_for_disconnect.assert_awaited_once_with(
+        device,
+        tion_module.DISCONNECT_SETTLE_SECONDS,
+    )
+    assert breezer._btle is None
+
+
+@pytest.mark.asyncio
+async def test_disconnect_rejects_a_backend_that_remains_connected():
+    breezer = TionS4("AA:BB:CC:DD:EE:FF")
+    client = AsyncMock()
+    client.is_connected = True
+    breezer._btle = client
+
+    with pytest.raises(exc.BleakError, match="remained connected"):
+        await breezer.disconnect()
 
     client.disconnect.assert_awaited_once()
     assert breezer._btle is None

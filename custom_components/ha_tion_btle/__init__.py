@@ -17,6 +17,7 @@ from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from . import tion_btle
+from .bluetooth_session import TionBluetoothSessionManager, get_session_manager
 from .const import CONF_AWAY_TEMP, CONF_KEEP_ALIVE, CONF_MAC, DOMAIN, PLATFORMS, TION_SCHEMA
 from .tion_btle.tion import MaxTriesExceededError, Tion
 
@@ -26,10 +27,11 @@ _LOGGER = logging.getLogger(__name__)
 async def async_setup_entry(hass, config_entry: ConfigEntry):
     _LOGGER.info("Setting up %s ", config_entry.unique_id)
 
-    hass.data.setdefault(DOMAIN, {})
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    session_manager = get_session_manager(hass)
 
-    instance = TionInstance(hass, config_entry)
-    hass.data[DOMAIN][config_entry.unique_id] = instance
+    instance = TionInstance(hass, config_entry, session_manager)
+    domain_data[config_entry.unique_id] = instance
     config_entry.async_on_unload(
         bluetooth.async_register_callback(
             hass=hass,
@@ -58,7 +60,12 @@ async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> 
 
 
 class TionInstance(DataUpdateCoordinator):
-    def __init__(self, hass: HomeAssistant, config_entry: ConfigEntry):
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        config_entry: ConfigEntry,
+        session_manager: TionBluetoothSessionManager,
+    ):
 
         self._config_entry: ConfigEntry = config_entry
 
@@ -77,6 +84,7 @@ class TionInstance(DataUpdateCoordinator):
         self._failure_count = 0
         self._failure_backoff = (5, 15, 60, 120, 300)
         self._operation_lock = asyncio.Lock()
+        self._session_manager = session_manager
 
         self.__tion: Tion = self.getTion(self.model, btle_device)
         mac_address = self.config[CONF_MAC]
@@ -128,18 +136,17 @@ class TionInstance(DataUpdateCoordinator):
 
         try:
             async with self._operation_lock:
-                response = await self.__tion.get()
+                async with self._session_manager.session(self.unique_id, self.__tion.disconnect):
+                    response = await self.__tion.get()
             self._record_success()
 
         except MaxTriesExceededError as e:
             delay = self._record_failure()
             _LOGGER.warning("BLE retry limit exceeded; delaying the next poll by %s seconds", delay)
-            await self.__tion.reset_connection()
             raise UpdateFailed("Could not connect to the Tion breezer") from e
         except Exception as e:
             delay = self._record_failure()
             _LOGGER.warning("Tion update failed: %s; delaying the next poll by %s seconds", e, delay)
-            await self.__tion.reset_connection()
             raise UpdateFailed(f"Tion update failed: {e}") from e
 
         response["is_on"]: bool = self._decode_state(response["state"])
@@ -172,14 +179,14 @@ class TionInstance(DataUpdateCoordinator):
         _LOGGER.info("Need to set: " + args)
         try:
             async with self._operation_lock:
-                await self.__tion.set(kwargs)
+                async with self._session_manager.session(self.unique_id, self.__tion.disconnect):
+                    await self.__tion.set(kwargs)
             self._record_success()
             self.data.update(original_args)
             self.async_update_listeners()
         except Exception as e:
             delay = self._record_failure()
             _LOGGER.warning("Tion set failed: %s; delaying the next poll by %s seconds", e, delay)
-            await self.__tion.reset_connection()
             raise UpdateFailed(f"Tion set failed: {e}") from e
 
     def _record_success(self) -> None:
@@ -207,7 +214,8 @@ class TionInstance(DataUpdateCoordinator):
     async def async_shutdown(self) -> None:
         """Release BLE resources owned by this config entry."""
         async with self._operation_lock:
-            await self.__tion.reset_connection()
+            async with self._session_manager.session(self.unique_id, self.__tion.reset_connection):
+                pass
 
     @property
     def device_info(self):
@@ -248,3 +256,4 @@ class TionInstance(DataUpdateCoordinator):
         if service_info.device is not None:
             self.rssi = service_info.rssi
             self.__tion.update_btle_device(service_info.device)
+            self._session_manager.advertisement_seen(service_info.device.address)

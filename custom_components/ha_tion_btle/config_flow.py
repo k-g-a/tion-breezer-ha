@@ -4,7 +4,6 @@ from __future__ import annotations
 import logging
 import datetime
 import asyncio
-from contextlib import suppress
 
 import bleak
 import voluptuous as vol
@@ -15,6 +14,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 
 from . import tion_btle
+from .bluetooth_session import get_session_manager
 from .const import DOMAIN, TION_SCHEMA, CONF_MAC
 from .tion_btle.tion import Tion
 
@@ -119,13 +119,6 @@ class TionFlow:
         )
         return tion
 
-    @staticmethod
-    async def _async_close_probe(tion: Tion | None) -> None:
-        """Close a temporary config-flow connection without masking its result."""
-        if tion is not None:
-            with suppress(Exception):
-                await tion.reset_connection()
-
 
 class TionConfigFlow(TionFlow, config_entries.ConfigFlow, domain=DOMAIN):
     """Initial setup."""
@@ -161,12 +154,16 @@ class TionConfigFlow(TionFlow, config_entries.ConfigFlow, domain=DOMAIN):
                 _tion: Tion | None = None
                 try:
                     _tion = self.getTion(input['model'], input['mac'], self.hass)
-                    result = await _tion.get()
+                    session_manager = get_session_manager(self.hass)
+                    async with session_manager.session(
+                        input['mac'],
+                        _tion.disconnect,
+                        wait_for_advertisement=False,
+                    ):
+                        result = await _tion.get()
                 except Exception as e:
                     _LOGGER.error("Could not get data from breezer. result is %s, error: %s" % (result, str(e)))
                     return self.async_show_form(step_id='add_failed')
-                finally:
-                    await self._async_close_probe(_tion)
 
                 return await self._create_entry(title=input['name'], data=input, step="user")
 
@@ -180,19 +177,22 @@ class TionConfigFlow(TionFlow, config_entries.ConfigFlow, domain=DOMAIN):
         try:
             _LOGGER.debug(self._data)
             _tion = self.getTion(self._data['model'], self._data['mac'], self.hass)
-            await _tion.pair()
-            # We should sleep a bit, because immediately connection will cause device disconnected exception while
-            # enabling notifications
-            await  asyncio.sleep(3)
+            session_manager = get_session_manager(self.hass)
+            async with session_manager.session(
+                self._data['mac'],
+                _tion.disconnect,
+                wait_for_advertisement=False,
+            ):
+                await _tion.pair()
+                # We should sleep a bit, because immediately connection will cause device disconnected exception while
+                # enabling notifications
+                await asyncio.sleep(3)
 
-            result = await _tion.get()
+                result = await _tion.get()
         except Exception as e:
             _LOGGER.error("Cannot pair and get data. Data is %s, result is %s; %s: %s", self._data, result,
                           type(e).__name__, str(e))
             return self.async_show_form(step_id='pair_failed')
-        finally:
-            await self._async_close_probe(_tion)
-
         return await self._create_entry(title=self._data['name'], data=self._data, step="pair")
 
     async def async_step_add_failed(self, input):

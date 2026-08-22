@@ -10,9 +10,15 @@ from time import localtime, strftime
 
 from bleak import exc
 from bleak.backends.device import BLEDevice
-from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
+from bleak_retry_connector import (
+    BleakClientWithServiceCache,
+    establish_connection,
+    wait_for_disconnect,
+)
 
 _LOGGER = logging.getLogger(__name__)
+
+DISCONNECT_SETTLE_SECONDS = 0.5
 
 
 class MaxTriesExceededError(Exception):
@@ -203,14 +209,10 @@ class Tion:
         Get current state from breezer
         :return: None
         """
-        try:
-            await self.connect()
-            await self._try_write(request=self.command_getStatus)
-            response = await self._get_data_from_breezer()
-            self._decode_response(response)
-        except Exception:
-            await self.reset_connection()
-            raise
+        await self.connect()
+        await self._try_write(request=self.command_getStatus)
+        response = await self._get_data_from_breezer()
+        self._decode_response(response)
 
     @final
     async def get(self, skip_update: bool = False) -> dict:
@@ -262,27 +264,23 @@ class Tion:
         except KeyError:
             pass
 
-        try:
-            await self.connect()
-            if not self.have_breezer_state:
-                await self._try_write(request=self.command_getStatus)
-                raw = await self._get_data_from_breezer()
-                self._decode_response(raw)
-            current_settings = self.__generate_common_json()
-            current_settings.update(self._generate_model_specific_json())
-
-            merged_settings = {**current_settings, **new_settings}
-            self._validate_state_before_write()
-
-            encoded_request = self._encode_request(merged_settings)
-            _LOGGER.debug("Will write %s", encoded_request)
-            await self._send_request(encoded_request)
+        await self.connect()
+        if not self.have_breezer_state:
+            await self._try_write(request=self.command_getStatus)
             raw = await self._get_data_from_breezer()
             self._decode_response(raw)
-            self._validate_state_before_write()
-        except Exception:
-            await self.reset_connection()
-            raise
+        current_settings = self.__generate_common_json()
+        current_settings.update(self._generate_model_specific_json())
+
+        merged_settings = {**current_settings, **new_settings}
+        self._validate_state_before_write()
+
+        encoded_request = self._encode_request(merged_settings)
+        _LOGGER.debug("Will write %s", encoded_request)
+        await self._send_request(encoded_request)
+        raw = await self._get_data_from_breezer()
+        self._decode_response(raw)
+        self._validate_state_before_write()
 
     def _validate_state_before_write(self) -> None:
         """Reject a write when a model reports a state that makes it unsafe."""
@@ -395,7 +393,7 @@ class Tion:
         _LOGGER.debug(f"_connect done. {self.connection_status=}.")
 
     @final
-    async def _disconnect(self):
+    async def _disconnect(self) -> bool:
         client = self._btle
         device = self._active_ble_device
         _LOGGER.debug(
@@ -406,17 +404,52 @@ class Tion:
             client.is_connected if client is not None else None,
             device.details.get("path") if device is not None and isinstance(device.details, dict) else None,
         )
-        self.__notifications_enabled = False
+        had_connection = client is not None
+        disconnect_error: Exception | None = None
         try:
             if client is not None:
-                # Always call disconnect when a client object exists.  A BLE
-                # peripheral may have already dropped the link, making
-                # is_connected false while the backend still owns transport
-                # resources that only disconnect() closes.
-                await client.disconnect()
+                if self.__notifications_enabled and client.is_connected:
+                    try:
+                        await client.stop_notify(self.uuid_notify)
+                    except Exception as err:
+                        # A disappearing peripheral may tear notifications down
+                        # first.  Continue to the authoritative link teardown.
+                        _LOGGER.debug(
+                            "Could not stop notifications for %s: %s",
+                            self.mac,
+                            err,
+                            exc_info=True,
+                        )
+                self.__notifications_enabled = False
+                try:
+                    # Always call disconnect when a client object exists.  A
+                    # backend may still own resources after is_connected flips.
+                    await client.disconnect()
+                except Exception as err:
+                    disconnect_error = err
+
+                if device is not None:
+                    # habluetooth releases a local slot from its BlueZ
+                    # Connected=False watcher, not directly from
+                    # HaBleakClientWrapper.disconnect().  Wait for that state
+                    # transition and give the adapter a short settling period.
+                    await wait_for_disconnect(device, DISCONNECT_SETTLE_SECONDS)
+
+                if client.is_connected:
+                    raise exc.BleakError(
+                        f"Tion breezer {self.mac} remained connected after disconnect"
+                    )
+                if disconnect_error is not None:
+                    _LOGGER.debug(
+                        "Backend disconnect for %s raised after the link closed: %s",
+                        self.mac,
+                        disconnect_error,
+                    )
         except Exception as err:
-            _LOGGER.warning("Error while disconnecting from %s: %s", self.mac, err)
+            _LOGGER.warning("Error while completing disconnect from %s: %s", self.mac, err)
+            raise
         finally:
+            self.__notifications_enabled = False
             # Keep the client installed until disconnect() has had a chance to
             # invoke its callback.  Clearing it before the await made every
             # expected callback look stale and hid the real BlueZ state.
@@ -431,6 +464,7 @@ class Tion:
             self.connection_status,
             id(client) if client is not None else None,
         )
+        return had_connection
 
     @final
     async def _try_write(self, request: bytearray):
@@ -617,9 +651,9 @@ class Tion:
 
     @final
     async def connect(self):
-        """Ensure the persistent BLE connection is ready."""
+        """Ensure the current operation's BLE connection is ready."""
         if self._btle is not None and self._btle.is_connected:
-            _LOGGER.debug("Reusing persistent BLE connection to %s", self.mac)
+            _LOGGER.debug("Reusing current operation's BLE connection to %s", self.mac)
             return
 
         async with self._semaphore:
@@ -631,20 +665,22 @@ class Tion:
             await self._connect()
 
     @final
-    async def disconnect(self):
-        """Explicitly close the persistent BLE connection."""
-        await self._disconnect()
+    async def disconnect(self) -> bool:
+        """Close the operation-scoped BLE connection and drain stale frames."""
+        had_connection = await self._disconnect()
         self.have_breezer_state = False
         while self._delegation.haveNewData:
             _LOGGER.debug(f"Cleaning data in disconnect: {self._delegation.data=}")
+        return had_connection
 
     @final
-    async def reset_connection(self):
+    async def reset_connection(self) -> bool:
         """Force a clean connection state after failures or entry unload."""
-        await self._disconnect()
+        had_connection = await self._disconnect()
         self.have_breezer_state = False
         while self._delegation.haveNewData:
             _LOGGER.debug(f"Cleaning data in reset_connection: {self._delegation.data=}")
+        return had_connection
 
     @property
     @abc.abstractmethod

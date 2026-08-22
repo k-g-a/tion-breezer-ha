@@ -12,14 +12,17 @@ The BLE reliability changes include:
 
 - Home Assistant-compatible connections through `bleak-retry-connector`;
 - fresh `BLEDevice` data from Home Assistant for reconnects and Bluetooth proxies;
-- cleanup after failed or unexpected connections;
-- protected connection bookkeeping;
+- one shared session queue for every configured Tion breezer;
+- explicit notification shutdown and BlueZ disconnect confirmation;
 - a five-second upper bound while waiting for protocol data;
-- serialized polling and commands per breezer;
+- serialized polling and commands across all Tion breezers;
 - removal of nested connect/disconnect calls in climate commands;
 - a one-minute retry interval after a failed poll instead of ten minutes.
 
-Connections remain operation-scoped. Home Assistant explicitly recommends not reusing a `BleakClient` between connections, and retaining one connection per breezer would consume scarce adapter connection slots in multi-device installations.
+Connections are operation-scoped. A command or poll may reuse its connection for
+multiple protocol frames, but teardown completes before the next Tion operation
+is admitted. This experimental lifecycle avoids reserving one adapter slot per
+breezer while preventing simultaneous scheduled polls from occupying all slots.
 
 ## Manual installation
 
