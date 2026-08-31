@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import abc
+import binascii
 import logging
 from random import randrange
 from typing import final, List
@@ -66,40 +67,82 @@ class TionLiteFamily(Tion):
         return [self.random, self.random, self.random, self.random]
 
     @final
-    def _collect_message(self, package: bytearray) -> bool:
+    def _reset_message_assembly(self) -> None:
+        """Discard every fragment belonging to an earlier response."""
+        self._data = bytearray()
+        self._crc = bytearray()
+        self._header = bytearray()
         self._have_full_package = False
+        self._got_new_sequence = False
+
+    @final
+    def _collect_message(self, package: bytearray) -> bool:
+        """Collect and validate one complete LT response frame."""
+        self._have_full_package = False
+        package = bytearray(package)
+
+        if not package:
+            _LOGGER.warning("Ignoring empty Tion notification")
+            return False
 
         _LOGGER.debug("Got %s from tion", bytes(package).hex())
+        packet_id = package[0]
 
-        if package[0] == self.FIRST_PACKET_ID or package[0] == self.SINGLE_PACKET_ID:
+        if packet_id == self.FIRST_PACKET_ID:
+            if self._got_new_sequence:
+                _LOGGER.warning("Got a new first packet before the previous response completed; discarding it")
+            self._reset_message_assembly()
             self._data = package
-            self._have_full_package = True if package[0] == self.SINGLE_PACKET_ID else False
-            self._got_new_sequence = True if package[0] == self.FIRST_PACKET_ID else False
-        elif package[0] == self.MIDDLE_PACKET_ID:
+            self._got_new_sequence = True
+            return False
+
+        if packet_id == self.SINGLE_PACKET_ID:
+            if self._got_new_sequence:
+                _LOGGER.warning("Got a single packet while assembling a fragmented response; discarding it")
+            self._reset_message_assembly()
+            self._data = package
+            self._have_full_package = True
+        elif packet_id == self.MIDDLE_PACKET_ID:
             if not self._got_new_sequence:
-                _LOGGER.critical("Got middle packet but waiting for a first!")
-            else:
-                package = list(package)
-                package.pop(0)
-                self._data += bytearray(package)
-        elif package[0] == self.END_PACKET_ID:
+                _LOGGER.warning("Ignoring middle packet without a matching first packet")
+                return False
+            self._data.extend(package[1:])
+            return False
+        elif packet_id == self.END_PACKET_ID:
             if not self._got_new_sequence:
-                _LOGGER.critical("Got end packet but waiting for a first!")
-            else:
-                self._have_full_package = True
-                self._got_new_sequence = False
-                package = list(package)
-                package.pop(0)
-                self._data += bytearray(package)
+                _LOGGER.warning("Ignoring end packet without a matching first packet")
+                return False
+            self._data.extend(package[1:])
+            self._got_new_sequence = False
+            self._have_full_package = True
         else:
-            _LOGGER.error("Unknown package id %s", hex(package[0]))
+            _LOGGER.warning("Ignoring notification with unknown packet id %s", hex(packet_id))
+            return False
 
-        if self._have_full_package:
-            self._header = self._data[:15]
-            self._data = self._data[15:-2]
-            self._crc = self._data[-2:]
+        frame = bytearray(self._data)
+        minimum_frame_size = 17  # packet id + 14-byte header + 2-byte CRC
+        declared_size = int.from_bytes(frame[1:3], byteorder="little") if len(frame) >= 3 else -1
+        invalid_reason = None
 
-        return self._have_full_package
+        if len(frame) < minimum_frame_size:
+            invalid_reason = f"frame is too short: {len(frame)} bytes"
+        elif declared_size != len(frame) - 1:
+            invalid_reason = f"declared size {declared_size} does not match {len(frame) - 1}"
+        elif frame[3] != self.MAGIC_NUMBER:
+            invalid_reason = f"invalid magic byte {frame[3]:#04x}"
+        elif binascii.crc_hqx(frame[1:], 0xFFFF) != 0:
+            invalid_reason = "CRC validation failed"
+
+        if invalid_reason is not None:
+            _LOGGER.warning("Discarding invalid Tion response (%s): %s", invalid_reason, bytes(frame).hex())
+            self._reset_message_assembly()
+            return False
+
+        self._header = frame[:15]
+        self._crc = frame[-2:]
+        self._data = frame[15:-2]
+        self._have_full_package = False
+        return True
 
     @final
     def split_command(self, request: bytearray) -> List[bytearray]:
