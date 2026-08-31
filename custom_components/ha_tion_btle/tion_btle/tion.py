@@ -123,6 +123,17 @@ class Tion:
         candidate = self._next_btle_device if self._next_btle_device is not None else self._ble_device
         return candidate if isinstance(candidate, BLEDevice) else None
 
+    def _reset_message_assembly(self) -> None:
+        """Reset model-specific response assembly state."""
+
+    def _prepare_response(self) -> None:
+        """Discard stale notifications and partial frames before a new request."""
+        while self._delegation.haveNewData:
+            stale = self._delegation.data
+            _LOGGER.debug("Discarding stale notification before request: %s", bytes(stale).hex())
+        self._reset_message_assembly()
+        self.have_breezer_state = False
+
     @abc.abstractmethod
     async def _send_request(self, request: bytearray):
         """ Send request to device
@@ -205,6 +216,7 @@ class Tion:
         """
         try:
             await self.connect()
+            self._prepare_response()
             await self._try_write(request=self.command_getStatus)
             response = await self._get_data_from_breezer()
             self._decode_response(response)
@@ -264,10 +276,12 @@ class Tion:
 
         try:
             await self.connect()
-            if not self.have_breezer_state:
-                await self._try_write(request=self.command_getStatus)
-                raw = await self._get_data_from_breezer()
-                self._decode_response(raw)
+            # A cached error mask must never permanently block writes. Always
+            # confirm the current device state with a newly assembled response.
+            self._prepare_response()
+            await self._try_write(request=self.command_getStatus)
+            raw = await self._get_data_from_breezer()
+            self._decode_response(raw)
             current_settings = self.__generate_common_json()
             current_settings.update(self._generate_model_specific_json())
 
@@ -276,6 +290,7 @@ class Tion:
 
             encoded_request = self._encode_request(merged_settings)
             _LOGGER.debug("Will write %s", encoded_request)
+            self._prepare_response()
             await self._send_request(encoded_request)
             raw = await self._get_data_from_breezer()
             self._decode_response(raw)
@@ -637,6 +652,7 @@ class Tion:
         self.have_breezer_state = False
         while self._delegation.haveNewData:
             _LOGGER.debug(f"Cleaning data in disconnect: {self._delegation.data=}")
+        self._reset_message_assembly()
 
     @final
     async def reset_connection(self):
@@ -645,6 +661,7 @@ class Tion:
         self.have_breezer_state = False
         while self._delegation.haveNewData:
             _LOGGER.debug(f"Cleaning data in reset_connection: {self._delegation.data=}")
+        self._reset_message_assembly()
 
     @property
     @abc.abstractmethod
