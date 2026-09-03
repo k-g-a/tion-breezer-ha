@@ -119,8 +119,19 @@ class TionInstance(DataUpdateCoordinator):
         return data
 
     @staticmethod
-    def _decode_state(state: str) -> bool:
-        return True if state == "on" else False
+    def _decode_state(state: str | bool | int) -> bool:
+        return state is True or state == 1 or state == "1" or state == "on"
+
+    def _normalize_response(self, response: dict) -> dict:
+        """Convert library values into Home Assistant-native coordinator data."""
+        response = dict(response)
+        response["is_on"] = self._decode_state(response["state"])
+        response["heater"] = self._decode_state(response["heater"])
+        response["is_heating"] = self._decode_state(response["heating"])
+        response["filter_remain"] = math.ceil(response["filter_remain"])
+        response["fan_speed"] = int(response["fan_speed"])
+        response["rssi"] = self.rssi
+        return response
 
     async def async_update_state(self):
         self.logger.info("Tion instance update started")
@@ -142,12 +153,7 @@ class TionInstance(DataUpdateCoordinator):
             await self.__tion.reset_connection()
             raise UpdateFailed(f"Tion update failed: {e}") from e
 
-        response["is_on"]: bool = self._decode_state(response["state"])
-        response["heater"]: bool = self._decode_state(response["heater"])
-        response["is_heating"] = self._decode_state(response["heating"])
-        response["filter_remain"] = math.ceil(response["filter_remain"])
-        response["fan_speed"] = int(response["fan_speed"])
-        response["rssi"] = self.rssi
+        response = self._normalize_response(response)
 
         self.logger.debug(f"Result is {response}")
         return response
@@ -161,7 +167,6 @@ class TionInstance(DataUpdateCoordinator):
         if "fan_speed" in kwargs:
             kwargs["fan_speed"] = int(kwargs["fan_speed"])
 
-        original_args = kwargs.copy()
         if "is_on" in kwargs:
             kwargs["state"] = "on" if kwargs["is_on"] else "off"
             del kwargs["is_on"]
@@ -173,9 +178,9 @@ class TionInstance(DataUpdateCoordinator):
         try:
             async with self._operation_lock:
                 await self.__tion.set(kwargs)
+                response = await self.__tion.get(skip_update=True)
             self._record_success()
-            self.data.update(original_args)
-            self.async_update_listeners()
+            self.async_set_updated_data(self._normalize_response(response))
         except Exception as e:
             delay = self._record_failure()
             _LOGGER.warning("Tion set failed: %s; delaying the next poll by %s seconds", e, delay)

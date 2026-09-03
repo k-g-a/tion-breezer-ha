@@ -17,7 +17,15 @@ CONF_KEEP_ALIVE = "keep_alive"
 CONF_INITIAL_HVAC_MODE = "initial_hvac_mode"
 CONF_AWAY_TEMP = "away_temp"
 CONF_MAC = "mac"
-PLATFORMS = [Platform.SENSOR, Platform.CLIMATE, Platform.SELECT, Platform.FAN]
+PLATFORMS = [
+    Platform.SENSOR,
+    Platform.BINARY_SENSOR,
+    Platform.CLIMATE,
+    Platform.SELECT,
+    Platform.SWITCH,
+    Platform.BUTTON,
+    Platform.FAN,
+]
 SUPPORTED_DEVICES = ['S3', 'S4', 'Lite']
 
 TION_SCHEMA = {
