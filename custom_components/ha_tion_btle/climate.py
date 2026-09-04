@@ -32,19 +32,10 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
     }
 )
 
-devices = []
-
-
 async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, async_add_entities: AddEntitiesCallback):
     """Setup entry"""
     tion_instance: TionInstance = hass.data[DOMAIN][config_entry.unique_id]
-    unique_id = tion_instance.unique_id
-
-    if unique_id not in devices:
-        devices.append(unique_id)
-        async_add_entities([TionClimateEntity(hass, tion_instance)])
-    else:
-        _LOGGER.warning(f"Device {unique_id} is already configured! ")
+    async_add_entities([TionClimateEntity(hass, tion_instance)])
 
     platform = entity_platform.async_get_current_platform()
     platform.async_register_entity_service(
