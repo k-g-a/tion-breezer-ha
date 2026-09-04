@@ -22,7 +22,7 @@ BUTTON_TYPES: tuple[ButtonEntityDescription, ...] = (
         key="reset_errors",
         name="Reset errors",
         icon="mdi:alert-remove",
-        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_category=EntityCategory.CONFIG,
     ),
 )
 

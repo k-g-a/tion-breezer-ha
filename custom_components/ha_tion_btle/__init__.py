@@ -14,6 +14,7 @@ from homeassistant.components.bluetooth import BluetoothCallbackMatcher
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from . import tion_btle
@@ -21,6 +22,41 @@ from .const import CONF_AWAY_TEMP, CONF_KEEP_ALIVE, CONF_MAC, DOMAIN, PLATFORMS,
 from .tion_btle.tion import MaxTriesExceededError, Tion
 
 _LOGGER = logging.getLogger(__name__)
+
+_NEW_DEFAULT_ENABLED_ENTITY_KEYS = frozenset({
+    "timer_active",
+    "magicair_connected",
+    "magicair_auto",
+    "work_time",
+    "fan_time",
+    "airflow_counter",
+    "heater_power_rating",
+    "max_fan_speed",
+    "comm_source",
+})
+
+
+@callback
+def _enable_newly_default_entities(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    device_unique_id: str,
+) -> None:
+    """Enable entities that an earlier PR revision disabled by default.
+
+    Only integration-disabled entries are changed. A user's explicit disabled
+    choice is represented by RegistryEntryDisabler.USER and remains untouched.
+    """
+    entity_registry = er.async_get(hass)
+    expected_unique_ids = {
+        f"{device_unique_id}-{key}" for key in _NEW_DEFAULT_ENABLED_ENTITY_KEYS
+    }
+    for entry in er.async_entries_for_config_entry(entity_registry, config_entry.entry_id):
+        if (
+            entry.unique_id in expected_unique_ids
+            and entry.disabled_by is er.RegistryEntryDisabler.INTEGRATION
+        ):
+            entity_registry.async_update_entity(entry.entity_id, disabled_by=None)
 
 
 async def async_setup_entry(hass, config_entry: ConfigEntry):
@@ -41,6 +77,7 @@ async def async_setup_entry(hass, config_entry: ConfigEntry):
 
     await hass.data[DOMAIN][config_entry.unique_id].async_config_entry_first_refresh()
 
+    _enable_newly_default_entities(hass, config_entry, instance.unique_id)
     await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
     return True
 

@@ -217,6 +217,26 @@ def test_decode_exposes_all_regular_4s_state_fields():
     }
 
 
+def test_4s_active_heating_uses_heater_output_not_raw_state_bit():
+    breezer = TionS4("dummy")
+    response = bytearray(31)
+    response[0] = (1 << 0) | (1 << 3) | (1 << 4)
+    response[4] = 1
+    response[30] = 0
+
+    breezer._decode_response(response)
+
+    assert breezer.heater == "off"
+    assert breezer.heating == "off"
+    assert breezer._generate_model_specific_json()["heater_active"] is False
+
+    response[30] = 25
+    breezer._decode_response(response)
+
+    assert breezer.heating == "on"
+    assert breezer._generate_model_specific_json()["heater_active"] is True
+
+
 def _settings(**changes):
     settings = {
         "state": "on",

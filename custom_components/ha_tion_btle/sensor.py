@@ -100,7 +100,6 @@ S4_SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.DURATION,
         state_class=SensorStateClass.TOTAL_INCREASING,
         entity_category=EntityCategory.DIAGNOSTIC,
-        entity_registry_enabled_default=False,
     ),
     SensorEntityDescription(
         key="fan_time",
@@ -109,14 +108,12 @@ S4_SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.DURATION,
         state_class=SensorStateClass.TOTAL_INCREASING,
         entity_category=EntityCategory.DIAGNOSTIC,
-        entity_registry_enabled_default=False,
     ),
     SensorEntityDescription(
         key="airflow_counter",
         name="Raw airflow counter",
         state_class=SensorStateClass.TOTAL_INCREASING,
         entity_category=EntityCategory.DIAGNOSTIC,
-        entity_registry_enabled_default=False,
     ),
     SensorEntityDescription(
         key="heater_power_rating",
@@ -125,20 +122,17 @@ S4_SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
-        entity_registry_enabled_default=False,
     ),
     SensorEntityDescription(
         key="max_fan_speed",
         name="Maximum fan speed",
         entity_category=EntityCategory.DIAGNOSTIC,
-        entity_registry_enabled_default=False,
         icon="mdi:fan-plus",
     ),
     SensorEntityDescription(
         key="comm_source",
         name="Communication source",
         entity_category=EntityCategory.DIAGNOSTIC,
-        entity_registry_enabled_default=False,
         icon="mdi:remote",
     ),
 )

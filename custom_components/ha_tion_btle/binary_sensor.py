@@ -38,20 +38,17 @@ BINARY_SENSOR_TYPES: tuple[BinarySensorEntityDescription, ...] = (
         name="Built-in timer active",
         device_class=BinarySensorDeviceClass.RUNNING,
         entity_category=EntityCategory.DIAGNOSTIC,
-        entity_registry_enabled_default=False,
     ),
     BinarySensorEntityDescription(
         key="magicair_connected",
         name="MagicAir connected",
         device_class=BinarySensorDeviceClass.CONNECTIVITY,
         entity_category=EntityCategory.DIAGNOSTIC,
-        entity_registry_enabled_default=False,
     ),
     BinarySensorEntityDescription(
         key="magicair_auto",
         name="MagicAir automatic control",
         entity_category=EntityCategory.DIAGNOSTIC,
-        entity_registry_enabled_default=False,
     ),
 )
 

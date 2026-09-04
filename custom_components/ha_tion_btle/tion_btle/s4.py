@@ -89,7 +89,6 @@ class TionS4(TionLiteFamily):
             self._state = response[0] & 1
             self._sound = response[0] >> 1 & 1
             self._light = response[0] >> 2 & 1
-            self._actual_heating = bool(response[0] >> 3 & 1)
             self._heater = True if response[0] >> 4 & 1 == 0 else False
             self._comm_source = "user" if response[0] >> 5 & 1 else "auto"
             self._filter_change_required = bool(response[0] >> 6 & 1)
@@ -101,6 +100,11 @@ class TionS4(TionLiteFamily):
             self._error_code = int.from_bytes(response[25:29], byteorder='little', signed=False)
             self._max_fan_speed = response[29]
             self._heater_output = response[30]
+            # The raw byte-0 bit 3 is not a reliable indication of active heat
+            # on 4S devices. The protocol exposes actual heater output in byte
+            # 30; the reference controller likewise treats a non-zero
+            # heater_var as active heating.
+            self._actual_heating = self._heater_output > 0
         except IndexError as e:
             raise TionException(
                 "s4 _decode_response",
