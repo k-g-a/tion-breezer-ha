@@ -85,7 +85,18 @@ async def test_successful_requests_reuse_persistent_connection(monkeypatch):
     establish_connection = AsyncMock(return_value=client)
     monkeypatch.setattr(tion_module, "establish_connection", establish_connection)
     monkeypatch.setattr(breezer, "_try_write", AsyncMock())
-    monkeypatch.setattr(breezer, "_get_data_from_breezer", AsyncMock(return_value=bytearray(31)))
+    monkeypatch.setattr(
+        breezer,
+        "_get_data_from_breezer",
+        AsyncMock(
+            side_effect=[
+                bytearray(31),
+                bytearray(4),
+                bytearray(31),
+                bytearray(4),
+            ]
+        ),
+    )
 
     await breezer.get()
     await breezer.get()

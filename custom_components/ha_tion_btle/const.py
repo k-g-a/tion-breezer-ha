@@ -8,14 +8,16 @@ from homeassistant.components.climate.const import (
     PRESET_NONE,
  )
 from homeassistant.const import (ATTR_TEMPERATURE, CONF_NAME, EVENT_HOMEASSISTANT_START, PRECISION_WHOLE, Platform, )
-from voluptuous import All, In
+from voluptuous import All, Coerce, In, Range
 DOMAIN = 'ha_tion_btle'
 DEFAULT_NAME = "Tion Breezer"
+DEFAULT_BOOST_DURATION_MINUTES = 5
 
 CONF_TARGET_TEMP = "target_temp"
 CONF_KEEP_ALIVE = "keep_alive"
 CONF_INITIAL_HVAC_MODE = "initial_hvac_mode"
 CONF_AWAY_TEMP = "away_temp"
+CONF_BOOST_DURATION = "boost_duration"
 CONF_MAC = "mac"
 PLATFORMS = [
     Platform.SENSOR,
@@ -34,5 +36,10 @@ TION_SCHEMA = {
     CONF_MAC: {'type': str, 'required': True},
     CONF_KEEP_ALIVE: {'type': int, 'default': 60, 'required': False},
     CONF_AWAY_TEMP: {'type': int, 'default': 15, 'required': False},
+    CONF_BOOST_DURATION: {
+        'type': All(Coerce(int), Range(min=1, max=1092)),
+        'default': DEFAULT_BOOST_DURATION_MINUTES,
+        'required': False,
+    },
     'pair': {'type': bool, 'default': True, 'required': False},
 }

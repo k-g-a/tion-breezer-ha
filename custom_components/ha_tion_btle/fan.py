@@ -99,6 +99,10 @@ class TionFan(FanEntity, CoordinatorEntity):
         self._attr_device_info = instance.device_info
         self._attr_unique_id = f"{instance.unique_id}-{description.key}"
         self._saved_fan_mode = None
+        if self.coordinator.supports_native_boost:
+            self._attr_preset_mode = (
+                PRESET_BOOST if self.coordinator.data.get("boost_active") else PRESET_NONE
+            )
 
         _LOGGER.debug(f"Init of fan  {self.name} ({instance.unique_id})")
         _LOGGER.debug(f"Speed step is {self.percentage_step}")
@@ -151,6 +155,13 @@ class TionFan(FanEntity, CoordinatorEntity):
         return self.coordinator.data.get(self.entity_description.key)
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
+        if preset_mode not in self.preset_modes:
+            raise ValueError(f"Unsupported preset mode: {preset_mode}")
+
+        if self.coordinator.supports_native_boost:
+            await self.coordinator.async_set_boost(preset_mode == PRESET_BOOST)
+            return
+
         if preset_mode == PRESET_BOOST and self.preset_mode != PRESET_BOOST:
             if self._saved_fan_mode is None:
                 self._saved_fan_mode = int(self.fan_mode)
@@ -169,6 +180,11 @@ class TionFan(FanEntity, CoordinatorEntity):
         await self.coordinator.set(fan_speed=target_speed, is_on=True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
+        if self.coordinator.supports_native_boost and self.coordinator.data.get("boost_active"):
+            # Let the breezer restore its pre-Boost speed before remembering the
+            # speed that a later turn_on should use.
+            await self.coordinator.async_set_boost(False)
+
         if self._saved_fan_mode is None and (self.fan_mode or 0) > 0:
             self._saved_fan_mode = self.fan_mode
 
@@ -178,4 +194,8 @@ class TionFan(FanEntity, CoordinatorEntity):
         self._attr_assumed_state = False if self.coordinator.last_update_success else True
         self._attr_is_on = self.coordinator.data.get("is_on")
         self._attr_percentage = self.mode2percent() if self._attr_is_on else 0  # should check attr to avoid deadlock
+        if self.coordinator.supports_native_boost:
+            self._attr_preset_mode = (
+                PRESET_BOOST if self.coordinator.data.get("boost_active") else PRESET_NONE
+            )
         self.async_write_ha_state()

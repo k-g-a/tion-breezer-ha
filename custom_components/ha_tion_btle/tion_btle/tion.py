@@ -135,6 +135,17 @@ class Tion:
         self._reset_message_assembly()
         self.have_breezer_state = False
 
+    def _expected_state_response_type(self) -> bytes | None:
+        """Return the model-specific frame type used for state responses."""
+        return None
+
+    def _response_frame_type(self) -> bytes | None:
+        """Return the frame type of the most recently assembled response."""
+        return None
+
+    async def _update_additional_state_from_breezer(self) -> None:
+        """Read model-specific state that is not included in the main response."""
+
     @abc.abstractmethod
     async def _send_request(self, request: bytearray):
         """ Send request to device
@@ -222,8 +233,9 @@ class Tion:
             await self.connect()
             self._prepare_response()
             await self._try_write(request=self.command_getStatus)
-            response = await self._get_data_from_breezer()
+            response = await self._get_data_from_breezer(self._expected_state_response_type())
             self._decode_response(response)
+            await self._update_additional_state_from_breezer()
         except Exception:
             await self.reset_connection()
             raise
@@ -282,7 +294,7 @@ class Tion:
             # confirm the current device state with a newly assembled response.
             self._prepare_response()
             await self._try_write(request=self.command_getStatus)
-            raw = await self._get_data_from_breezer()
+            raw = await self._get_data_from_breezer(self._expected_state_response_type())
             self._decode_response(raw)
             current_settings = self.__generate_common_json()
             current_settings.update(self._generate_model_specific_json())
@@ -295,12 +307,17 @@ class Tion:
             _LOGGER.debug("Will write %s", encoded_request)
             self._prepare_response()
             await self._send_request(encoded_request)
-            raw = await self._get_data_from_breezer()
+            raw = await self._get_data_from_breezer(self._expected_state_response_type())
             self._decode_response(raw)
             self._validate_state_before_write(new_settings)
+            await self._update_additional_state_from_breezer()
         except Exception:
             await self.reset_connection()
             raise
+
+    async def set_boost(self, duration_seconds: int) -> None:
+        """Set a firmware-managed boost duration when supported by the model."""
+        raise TionException("set_boost", f"Native boost is not supported by {self.model}")
 
     def _validate_state_before_write(self, requested_changes: dict | None = None) -> None:
         """Reject a write when a model reports a state that makes it unsafe."""
@@ -683,8 +700,11 @@ class Tion:
         raise NotImplementedError()
 
     @final
-    async def _get_data_from_breezer(self) -> bytearray:
-        """ Get byte array with breezer response on state request
+    async def _get_data_from_breezer(
+        self,
+        expected_frame_type: bytes | bytearray | list[int] | tuple[int, ...] | None = None,
+    ) -> bytearray:
+        """Get one complete response, optionally matching a protocol frame type.
 
         :returns:
           breezer response
@@ -699,6 +719,19 @@ class Tion:
             if self._delegation.haveNewData:
                 byte_response = self._delegation.data
                 if self._collect_message(byte_response):
+                    actual_frame_type = self._response_frame_type()
+                    if (
+                        expected_frame_type is not None
+                        and actual_frame_type != bytes(expected_frame_type)
+                    ):
+                        _LOGGER.warning(
+                            "Ignoring unexpected Tion response frame type %s while waiting for %s",
+                            actual_frame_type.hex() if actual_frame_type is not None else None,
+                            bytes(expected_frame_type).hex(),
+                        )
+                        self._reset_message_assembly()
+                        i = 0
+                        continue
                     self.have_breezer_state = True
                     break
                 i = 0
@@ -709,7 +742,8 @@ class Tion:
             _LOGGER.debug("Waiting too long for data")
 
         if self.have_breezer_state:
-            result = self._data
+            result = bytearray(self._data)
+            self._reset_message_assembly()
 
         else:
             raise TionException("_get_data_from_breezer", "Could not get breezer state")

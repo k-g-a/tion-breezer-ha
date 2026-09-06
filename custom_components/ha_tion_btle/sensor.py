@@ -135,6 +135,14 @@ S4_SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         icon="mdi:remote",
     ),
+    SensorEntityDescription(
+        key="boost_time_left",
+        name="Boost time remaining",
+        native_unit_of_measurement=UnitOfTime.SECONDS,
+        device_class=SensorDeviceClass.DURATION,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:fan-clock",
+    ),
 )
 
 

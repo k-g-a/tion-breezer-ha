@@ -5,6 +5,7 @@ import asyncio
 import datetime
 import logging
 import math
+from collections.abc import Callable
 from datetime import timedelta
 from functools import cached_property
 
@@ -15,10 +16,20 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from . import tion_btle
-from .const import CONF_AWAY_TEMP, CONF_KEEP_ALIVE, CONF_MAC, DOMAIN, PLATFORMS, TION_SCHEMA
+from .const import (
+    CONF_AWAY_TEMP,
+    CONF_BOOST_DURATION,
+    CONF_KEEP_ALIVE,
+    CONF_MAC,
+    DEFAULT_BOOST_DURATION_MINUTES,
+    DOMAIN,
+    PLATFORMS,
+    TION_SCHEMA,
+)
 from .tion_btle.tion import MaxTriesExceededError, Tion
 
 _LOGGER = logging.getLogger(__name__)
@@ -114,6 +125,7 @@ class TionInstance(DataUpdateCoordinator):
         self._failure_count = 0
         self._failure_backoff = (5, 15, 60, 120, 300)
         self._operation_lock = asyncio.Lock()
+        self._cancel_boost_expiry_refresh: Callable[[], None] | None = None
 
         self.__tion: Tion = self.getTion(self.model, btle_device)
         mac_address = self.config[CONF_MAC]
@@ -191,6 +203,7 @@ class TionInstance(DataUpdateCoordinator):
             raise UpdateFailed(f"Tion update failed: {e}") from e
 
         response = self._normalize_response(response)
+        self._schedule_boost_expiry_refresh(response)
 
         self.logger.debug(f"Result is {response}")
         return response
@@ -200,7 +213,24 @@ class TionInstance(DataUpdateCoordinator):
         """Temperature for away mode"""
         return self.config[CONF_AWAY_TEMP] if CONF_AWAY_TEMP in self.config else TION_SCHEMA[CONF_AWAY_TEMP]['default']
 
+    @property
+    def supports_native_boost(self) -> bool:
+        """Return whether this model exposes the firmware Turbo protocol."""
+        return self.model == "S4"
+
+    @property
+    def boost_duration_seconds(self) -> int:
+        """Return the configured native Boost duration in seconds."""
+        minutes = self.config.get(CONF_BOOST_DURATION, DEFAULT_BOOST_DURATION_MINUTES)
+        return int(minutes) * 60
+
     async def set(self, **kwargs):
+        cancel_native_boost = (
+            self.supports_native_boost
+            and bool(self.data.get("boost_active"))
+            and ("fan_speed" in kwargs or kwargs.get("is_on") is False)
+        )
+
         if "fan_speed" in kwargs:
             kwargs["fan_speed"] = int(kwargs["fan_speed"])
 
@@ -214,15 +244,67 @@ class TionInstance(DataUpdateCoordinator):
         _LOGGER.info("Need to set: " + args)
         try:
             async with self._operation_lock:
+                if cancel_native_boost:
+                    await self.__tion.set_boost(0)
                 await self.__tion.set(kwargs)
                 response = await self.__tion.get(skip_update=True)
             self._record_success()
-            self.async_set_updated_data(self._normalize_response(response))
+            normalized = self._normalize_response(response)
+            self._schedule_boost_expiry_refresh(normalized)
+            self.async_set_updated_data(normalized)
         except Exception as e:
             delay = self._record_failure()
             _LOGGER.warning("Tion set failed: %s; delaying the next poll by %s seconds", e, delay)
             await self.__tion.reset_connection()
             raise UpdateFailed(f"Tion set failed: {e}") from e
+
+    async def async_set_boost(self, enabled: bool) -> None:
+        """Start or cancel the native 4S Turbo timer and publish its state."""
+        if not self.supports_native_boost:
+            raise UpdateFailed(f"Native Boost is not supported by Tion {self.model}")
+
+        if bool(self.data.get("boost_active")) == enabled:
+            return
+
+        duration = self.boost_duration_seconds if enabled else 0
+        _LOGGER.info("Need to set native Boost: enabled=%s duration=%s seconds", enabled, duration)
+        try:
+            async with self._operation_lock:
+                await self.__tion.set_boost(duration)
+                response = await self.__tion.get(skip_update=True)
+            self._record_success()
+            normalized = self._normalize_response(response)
+            self._schedule_boost_expiry_refresh(normalized)
+            self.async_set_updated_data(normalized)
+        except Exception as e:
+            delay = self._record_failure()
+            _LOGGER.warning("Tion Boost command failed: %s; delaying the next poll by %s seconds", e, delay)
+            await self.__tion.reset_connection()
+            raise UpdateFailed(f"Tion Boost command failed: {e}") from e
+
+    def _schedule_boost_expiry_refresh(self, response: dict) -> None:
+        """Refresh immediately after the device-reported Turbo deadline."""
+        if self._cancel_boost_expiry_refresh is not None:
+            self._cancel_boost_expiry_refresh()
+            self._cancel_boost_expiry_refresh = None
+
+        if not self.supports_native_boost:
+            return
+
+        seconds_left = int(response.get("boost_time_left") or 0)
+        if seconds_left <= 0:
+            return
+
+        self._cancel_boost_expiry_refresh = async_call_later(
+            self.hass,
+            seconds_left + 1,
+            self._async_refresh_after_boost,
+        )
+
+    async def _async_refresh_after_boost(self, _now: datetime.datetime) -> None:
+        """Confirm that firmware ended Boost and restored the prior state."""
+        self._cancel_boost_expiry_refresh = None
+        await self.async_request_refresh()
 
     def _record_success(self) -> None:
         self._failure_count = 0
@@ -248,6 +330,9 @@ class TionInstance(DataUpdateCoordinator):
 
     async def async_shutdown(self) -> None:
         """Release BLE resources owned by this config entry."""
+        if self._cancel_boost_expiry_refresh is not None:
+            self._cancel_boost_expiry_refresh()
+            self._cancel_boost_expiry_refresh = None
         async with self._operation_lock:
             await self.__tion.reset_connection()
 

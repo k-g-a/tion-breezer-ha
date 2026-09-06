@@ -15,10 +15,13 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 
 from . import tion_btle
-from .const import DOMAIN, TION_SCHEMA, CONF_MAC
+from .const import CONF_BOOST_DURATION, CONF_MAC, DOMAIN, TION_SCHEMA
 from .tion_btle.tion import Tion
 
 _LOGGER = logging.getLogger(__name__)
+
+TION_CONFIG_SCHEMA = TION_SCHEMA.copy()
+del TION_CONFIG_SCHEMA[CONF_BOOST_DURATION]
 
 TION_OPTIONS_SCHEMA = TION_SCHEMA.copy()
 del TION_OPTIONS_SCHEMA["pair"]
@@ -170,7 +173,7 @@ class TionConfigFlow(TionFlow, config_entries.ConfigFlow, domain=DOMAIN):
 
                 return await self._create_entry(title=input['name'], data=input, step="user")
 
-        return self.async_show_form(step_id="user", data_schema=self.get_schema(TION_SCHEMA))
+        return self.async_show_form(step_id="user", data_schema=self.get_schema(TION_CONFIG_SCHEMA))
 
     async def async_step_pair(self, input):
         """Pair host and breezer"""
@@ -221,4 +224,7 @@ class TionOptionsFlowHandler(TionConfigFlow, config_entries.OptionsFlow):
         if input is not None:
             return await self._create_entry(title="", data=input, step="options")
         else:
-            return self.async_show_form(step_id="init", data_schema=self.get_schema(TION_OPTIONS_SCHEMA))
+            options_schema = TION_OPTIONS_SCHEMA.copy()
+            if self.config.get("model") != "S4":
+                del options_schema[CONF_BOOST_DURATION]
+            return self.async_show_form(step_id="init", data_schema=self.get_schema(options_schema))

@@ -76,6 +76,11 @@ class TionLiteFamily(Tion):
         self._got_new_sequence = False
 
     @final
+    def _response_frame_type(self) -> bytes | None:
+        """Return the two-byte LT frame type from the assembled header."""
+        return bytes(self._header[5:7]) if len(self._header) >= 7 else None
+
+    @final
     def _collect_message(self, package: bytearray) -> bool:
         """Collect and validate one complete LT response frame."""
         self._have_full_package = False

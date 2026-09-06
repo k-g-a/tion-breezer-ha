@@ -1,5 +1,5 @@
 import binascii
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, call
 
 import pytest
 
@@ -85,7 +85,7 @@ async def test_set_uses_device_response_as_source_of_truth(monkeypatch):
     disconnect = AsyncMock()
     write_status = AsyncMock()
     send_request = AsyncMock()
-    get_response = AsyncMock(return_value=response)
+    get_response = AsyncMock(side_effect=[response, response, bytearray(4)])
     monkeypatch.setattr(breezer, "connect", connect)
     monkeypatch.setattr(breezer, "disconnect", disconnect)
     monkeypatch.setattr(breezer, "_try_write", write_status)
@@ -96,9 +96,188 @@ async def test_set_uses_device_response_as_source_of_truth(monkeypatch):
 
     assert breezer.fan_speed == 2
     assert breezer.active_error_codes == []
-    write_status.assert_awaited_once_with(request=breezer.command_getStatus)
+    assert write_status.await_args_list == [
+        call(request=breezer.command_getStatus),
+        call(request=breezer.command_getTurboStatus),
+    ]
     send_request.assert_awaited_once()
     disconnect.assert_not_awaited()
+
+
+def test_turbo_status_request_uses_native_4s_frame_type_and_valid_crc():
+    breezer = TionS4("dummy")
+
+    request = breezer.command_getTurboStatus
+
+    assert request[0] == breezer.SINGLE_PACKET_ID
+    assert request[5:7] == bytes(breezer.TURBO_REQUEST_PARAMS)
+    assert int.from_bytes(request[7:11], byteorder="little") == breezer.BLE_REQUEST_ID
+    assert binascii.crc_hqx(request[1:], 0xFFFF) == 0
+
+
+def test_turbo_set_request_encodes_duration_and_valid_crc():
+    breezer = TionS4("dummy")
+
+    request = breezer._encode_turbo_request(300)
+
+    assert request[0] == breezer.SINGLE_PACKET_ID
+    assert request[5:7] == bytes(breezer.TURBO_SET_PARAMS)
+    assert int.from_bytes(request[7:11], byteorder="little") == breezer.BLE_REQUEST_ID
+    assert int.from_bytes(request[11:15], byteorder="little") == 1
+    assert int.from_bytes(request[15:17], byteorder="little") == 300
+    assert request[17] == 0
+    assert binascii.crc_hqx(request[1:], 0xFFFF) == 0
+
+
+@pytest.mark.parametrize("duration", [-1, 0x10000])
+def test_turbo_set_rejects_duration_outside_uint16(duration):
+    breezer = TionS4("dummy")
+
+    with pytest.raises(TionException, match="between 0 and 65535 seconds"):
+        breezer._encode_turbo_request(duration)
+
+
+def test_turbo_response_exposes_device_timer_state():
+    breezer = TionS4("dummy")
+
+    breezer._decode_turbo_response(bytearray([1, 0x2C, 0x01, 0]))
+
+    state = breezer._generate_model_specific_json()
+    assert state["boost_active"] is True
+    assert state["boost_time_left"] == 300
+    assert state["boost_error_code"] == 0
+
+    breezer._decode_turbo_response(bytearray([0, 0x2C, 0x01, 0]))
+    assert breezer._boost_active is False
+    assert breezer._boost_time_left == 0
+
+
+def test_turbo_response_rejects_invalid_size_and_device_error():
+    breezer = TionS4("dummy")
+
+    with pytest.raises(TionException, match="invalid Tion 4S Turbo response"):
+        breezer._decode_turbo_response(bytearray(3))
+
+    with pytest.raises(TionException, match="error code 7"):
+        breezer._decode_turbo_response(bytearray([0, 0, 0, 7]), reject_error=True)
+
+
+def test_turbo_status_error_is_exposed_without_breaking_state_poll():
+    breezer = TionS4("dummy")
+
+    breezer._decode_turbo_response(bytearray([1, 30, 0, 7]))
+
+    assert breezer._boost_active is True
+    assert breezer._boost_time_left == 30
+    assert breezer._boost_error_code == 7
+
+
+@pytest.mark.asyncio
+async def test_response_reader_ignores_unrelated_valid_frame_type():
+    breezer = TionS4("dummy")
+    state = bytearray(31)
+    state[4] = 3
+    turbo_frame = breezer._build_frame(
+        breezer.SINGLE_PACKET_ID,
+        breezer.TURBO_RESPONSE_PARAMS,
+        (1).to_bytes(4, byteorder="little") + bytearray([1, 44, 1, 0]),
+    )
+    state_frame = breezer._build_frame(
+        breezer.FIRST_PACKET_ID,
+        breezer.STATE_RESPONSE_PARAMS,
+        (2).to_bytes(4, byteorder="little") + state,
+    )
+
+    for packet in breezer.split_command(turbo_frame):
+        breezer._delegation.handleNotification(1, packet)
+    for packet in breezer.split_command(state_frame):
+        breezer._delegation.handleNotification(1, packet)
+
+    response = await breezer._get_data_from_breezer(breezer.STATE_RESPONSE_PARAMS)
+
+    assert response == state
+    assert not breezer._delegation.haveNewData
+
+
+@pytest.mark.asyncio
+async def test_native_boost_uses_firmware_timer_and_refreshes_regular_state(monkeypatch):
+    breezer = TionS4("dummy")
+    before = bytearray(31)
+    before[4] = 2
+    after = bytearray(31)
+    after[4] = 6
+    turbo = bytearray([1, 0x2C, 0x01, 0])
+    write_status = AsyncMock()
+    send_request = AsyncMock()
+    get_response = AsyncMock(side_effect=[before, turbo, after])
+    monkeypatch.setattr(breezer, "connect", AsyncMock())
+    monkeypatch.setattr(breezer, "_try_write", write_status)
+    monkeypatch.setattr(breezer, "_send_request", send_request)
+    monkeypatch.setattr(breezer, "_get_data_from_breezer", get_response)
+
+    await breezer.set_boost(300)
+
+    assert write_status.await_args_list == [
+        call(request=breezer.command_getStatus),
+        call(request=breezer.command_getStatus),
+    ]
+    request = send_request.await_args.args[0]
+    assert request[5:7] == bytes(breezer.TURBO_SET_PARAMS)
+    assert int.from_bytes(request[15:17], byteorder="little") == 300
+    assert get_response.await_args_list == [
+        call(breezer.STATE_RESPONSE_PARAMS),
+        call(breezer.TURBO_RESPONSE_PARAMS),
+        call(breezer.STATE_RESPONSE_PARAMS),
+    ]
+    assert breezer._boost_active is True
+    assert breezer._boost_time_left == 300
+    assert breezer.fan_speed == 6
+
+
+@pytest.mark.asyncio
+async def test_native_boost_cancel_bypasses_state_error_guard(monkeypatch):
+    breezer = TionS4("dummy")
+    state = bytearray(31)
+    state[4] = 2
+    state[25:29] = ((1 << 0) | (1 << 10)).to_bytes(4, byteorder="little")
+    write_status = AsyncMock()
+    send_request = AsyncMock()
+    monkeypatch.setattr(breezer, "connect", AsyncMock())
+    monkeypatch.setattr(breezer, "_try_write", write_status)
+    monkeypatch.setattr(breezer, "_send_request", send_request)
+    monkeypatch.setattr(
+        breezer,
+        "_get_data_from_breezer",
+        AsyncMock(side_effect=[bytearray(4), state]),
+    )
+
+    await breezer.set_boost(0)
+
+    write_status.assert_awaited_once_with(request=breezer.command_getStatus)
+    request = send_request.await_args.args[0]
+    assert int.from_bytes(request[15:17], byteorder="little") == 0
+    assert breezer._boost_active is False
+    assert breezer.active_error_codes == ["EC01", "EC11"]
+
+
+@pytest.mark.asyncio
+async def test_native_boost_enable_is_blocked_by_fresh_critical_error(monkeypatch):
+    breezer = TionS4("dummy")
+    state = bytearray(31)
+    state[25:29] = (1 << 2).to_bytes(4, byteorder="little")
+    send_request = AsyncMock()
+    reset_connection = AsyncMock()
+    monkeypatch.setattr(breezer, "connect", AsyncMock())
+    monkeypatch.setattr(breezer, "_try_write", AsyncMock())
+    monkeypatch.setattr(breezer, "_send_request", send_request)
+    monkeypatch.setattr(breezer, "_get_data_from_breezer", AsyncMock(return_value=state))
+    monkeypatch.setattr(breezer, "reset_connection", reset_connection)
+
+    with pytest.raises(TionException, match="EC03"):
+        await breezer.set_boost(300)
+
+    send_request.assert_not_awaited()
+    reset_connection.assert_awaited_once()
 
 
 def test_invalid_state_response_size_is_rejected():
@@ -214,6 +393,9 @@ def test_decode_exposes_all_regular_4s_state_fields():
         "airflow_total": 10,
         "max_fan_speed": 6,
         "heater_output": 55,
+        "boost_active": False,
+        "boost_time_left": 0,
+        "boost_error_code": 0,
     }
 
 
@@ -291,7 +473,11 @@ async def test_set_marks_sound_and_light_changes_as_persistent(monkeypatch):
     monkeypatch.setattr(breezer, "connect", AsyncMock())
     monkeypatch.setattr(breezer, "_try_write", AsyncMock())
     monkeypatch.setattr(breezer, "_send_request", send_request)
-    monkeypatch.setattr(breezer, "_get_data_from_breezer", AsyncMock(return_value=response))
+    monkeypatch.setattr(
+        breezer,
+        "_get_data_from_breezer",
+        AsyncMock(side_effect=[response, response, bytearray(4)]),
+    )
 
     await breezer.set({"sound": "off"})
 
@@ -309,7 +495,11 @@ async def test_reset_errors_executes_while_critical_errors_are_active(monkeypatc
     monkeypatch.setattr(breezer, "connect", AsyncMock())
     monkeypatch.setattr(breezer, "_try_write", AsyncMock())
     monkeypatch.setattr(breezer, "_send_request", send_request)
-    monkeypatch.setattr(breezer, "_get_data_from_breezer", AsyncMock(return_value=response))
+    monkeypatch.setattr(
+        breezer,
+        "_get_data_from_breezer",
+        AsyncMock(side_effect=[response, response, bytearray(4)]),
+    )
 
     await breezer.set({"reset_errors": True})
 

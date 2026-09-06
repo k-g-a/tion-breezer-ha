@@ -35,6 +35,8 @@ In addition to power, fan, climate, and air-source controls, Tion 4S devices exp
 
 The error-reset action is allowed while critical errors are active. Other ordinary state changes remain protected until the device reports that the critical condition has cleared.
 
+Tion 4S Boost uses the breezer's native Turbo timer rather than a simulated maximum-speed preset. The device reports whether Turbo is active and how many seconds remain, restores its previous operating state when the timer expires, and continues the countdown without a Bluetooth connection. The duration defaults to five minutes and can be changed in the integration options. Fan and climate entities show the same device-reported Boost state; Away and Sleep remain Home Assistant-managed convenience presets.
+
 ## Manual installation
 
 Private GitHub repositories cannot be installed through HACS. Until this repository is made public:
