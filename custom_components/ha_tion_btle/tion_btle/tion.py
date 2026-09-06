@@ -100,6 +100,7 @@ class Tion:
         self._mode: int = 0
         self._state: bool = False
         self._heater: bool = False
+        self._actual_heating: bool | None = None
         self._sound: bool = False
         self._filter_remain: float = 0.0
         self._error_code: int = 0
@@ -199,7 +200,10 @@ class Tion:
     @final
     @property
     def heating(self) -> str:
-        """Tries to guess is heater working right now."""
+        """Return actual heater activity when reported, otherwise estimate it."""
+        if self._actual_heating is not None:
+            return self._decode_state(self._actual_heating)
+
         if self.heater == "off":
             return "off"
 
@@ -249,9 +253,7 @@ class Tion:
         :param request: changed breezer parameter from set request
         :return: None
         """
-        for p in ['fan_speed', 'heater_temp', 'heater', 'sound', 'mode', 'state']:
-            # ToDo: lite have additional parameters to set: "light" and "co2_auto_control", so we should get this
-            #  list from class
+        for p in ['fan_speed', 'heater_temp', 'heater', 'sound', 'light', 'mode', 'state']:
             try:
                 setattr(self, p, request[p])
             except KeyError:
@@ -286,7 +288,8 @@ class Tion:
             current_settings.update(self._generate_model_specific_json())
 
             merged_settings = {**current_settings, **new_settings}
-            self._validate_state_before_write()
+            merged_settings["_save_state"] = bool({"sound", "light"} & new_settings.keys())
+            self._validate_state_before_write(new_settings)
 
             encoded_request = self._encode_request(merged_settings)
             _LOGGER.debug("Will write %s", encoded_request)
@@ -294,12 +297,12 @@ class Tion:
             await self._send_request(encoded_request)
             raw = await self._get_data_from_breezer()
             self._decode_response(raw)
-            self._validate_state_before_write()
+            self._validate_state_before_write(new_settings)
         except Exception:
             await self.reset_connection()
             raise
 
-    def _validate_state_before_write(self) -> None:
+    def _validate_state_before_write(self, requested_changes: dict | None = None) -> None:
         """Reject a write when a model reports a state that makes it unsafe."""
 
     @final

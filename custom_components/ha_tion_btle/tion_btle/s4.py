@@ -21,12 +21,27 @@ class TionS4(TionLiteFamily):
     MIN_STATE_RESPONSE_SIZE = 31
     ERROR_CODES = tuple(f"EC{code:02d}" for code in range(1, 12))
     WARNING_CODES = tuple(f"WS{code:02d}" for code in range(1, 7))
+    HEATER_POWER_BY_TYPE = {0: 0, 1: 1000, 2: 1400}
 
     def __init__(self, mac: str | BLEDevice):
         super().__init__(mac)
 
         self.modes = ['outside', 'recirculation']
         self._request_id = 0
+        self._filter_change_required = False
+        self._heater_power_rating: int | None = 0
+        self._magicair_connected = False
+        self._magicair_auto = False
+        self._timer_active = False
+        self._comm_source = "auto"
+        self._pcb_control_temp = 0
+        self._pcb_power_temp = 0
+        self._work_time = 0
+        self._fan_time = 0
+        self._airflow_counter = 0
+        self._airflow_total = 0.0
+        self._max_fan_speed = 6
+        self._heater_output = 0
 
         if mac == "dummy":
             _LOGGER.info("Dummy mode!")
@@ -39,6 +54,10 @@ class TionS4(TionLiteFamily):
     @property
     def SET_PARAMS(self) -> list:
         return [48, 50]  # 0x30 0x32
+
+    @property
+    def SAVE_PARAMS(self) -> list:
+        return [52, 50]  # 0x34 0x32
 
     @property
     def REQUEST_PARAMS(self) -> list:
@@ -59,12 +78,33 @@ class TionS4(TionLiteFamily):
             self._fan_speed = response[4]
             self._in_temp = self.decode_temperature(response[5])
             self._out_temp = self.decode_temperature(response[6])
-            self._filter_remain = int.from_bytes(response[17:20], byteorder='little', signed=False) / 86400
+            self._pcb_control_temp = self.decode_temperature(response[7])
+            self._pcb_power_temp = self.decode_temperature(response[8])
+            self._work_time = int.from_bytes(response[9:13], byteorder='little', signed=False)
+            self._fan_time = int.from_bytes(response[13:17], byteorder='little', signed=False)
+            filter_time = int.from_bytes(response[17:21], byteorder='little', signed=False)
+            self._filter_remain = filter_time / 86400
+            self._airflow_counter = int.from_bytes(response[21:25], byteorder='little', signed=False)
+            self._airflow_total = self._airflow_counter * 15 / 3600
             self._state = response[0] & 1
             self._sound = response[0] >> 1 & 1
             self._light = response[0] >> 2 & 1
             self._heater = True if response[0] >> 4 & 1 == 0 else False
+            self._comm_source = "user" if response[0] >> 5 & 1 else "auto"
+            self._filter_change_required = bool(response[0] >> 6 & 1)
+            heater_type = ((response[0] >> 7) & 1) | ((response[1] & 0b11) << 1)
+            self._heater_power_rating = self.HEATER_POWER_BY_TYPE.get(heater_type)
+            self._magicair_connected = bool(response[1] >> 2 & 1)
+            self._magicair_auto = bool(response[1] >> 3 & 1)
+            self._timer_active = bool(response[1] >> 4 & 1)
             self._error_code = int.from_bytes(response[25:29], byteorder='little', signed=False)
+            self._max_fan_speed = response[29]
+            self._heater_output = response[30]
+            # The raw byte-0 bit 3 is not a reliable indication of active heat
+            # on 4S devices. The protocol exposes actual heater output in byte
+            # 30; the reference controller likewise treats a non-zero
+            # heater_var as active heating.
+            self._actual_heating = self._heater_output > 0
         except IndexError as e:
             raise TionException(
                 "s4 _decode_response",
@@ -75,6 +115,22 @@ class TionS4(TionLiteFamily):
         return {
             "light": self.light,
             "active_error_codes": self.active_error_codes,
+            "device_problem": bool(self.active_error_codes),
+            "heater_active": bool(self._actual_heating),
+            "filter_change_required": self._filter_change_required,
+            "heater_power_rating": self._heater_power_rating,
+            "magicair_connected": self._magicair_connected,
+            "magicair_auto": self._magicair_auto,
+            "timer_active": self._timer_active,
+            "comm_source": self._comm_source,
+            "pcb_control_temp": self._pcb_control_temp,
+            "pcb_power_temp": self._pcb_power_temp,
+            "work_time": self._work_time,
+            "fan_time": self._fan_time,
+            "airflow_counter": self._airflow_counter,
+            "airflow_total": self._airflow_total,
+            "max_fan_speed": self._max_fan_speed,
+            "heater_output": self._heater_output,
         }
 
     @property
@@ -86,7 +142,10 @@ class TionS4(TionLiteFamily):
         )
         return codes
 
-    def _validate_state_before_write(self) -> None:
+    def _validate_state_before_write(self, requested_changes: dict | None = None) -> None:
+        if requested_changes and requested_changes.get("reset_errors"):
+            return
+
         critical_errors = [code for code in self.active_error_codes if code.startswith("EC")]
         if critical_errors:
             raise TionException(
@@ -123,7 +182,9 @@ class TionS4(TionLiteFamily):
                 (self._encode_state(request["sound"]) << 1) | \
                 (self._encode_state(request["light"]) << 2) | \
                 ((not self._encode_state(request["heater"])) << 3) | \
-                (True << 4)
+                (True << 4) | \
+                (bool(request.get("reset_errors")) << 6) | \
+                (bool(request.get("reset_filter")) << 7)
         if request["mode"] not in self.modes:
             raise TionException("s4 _encode_request", f"Unsupported Tion 4S mode: {request['mode']!r}")
 
@@ -140,7 +201,8 @@ class TionS4(TionLiteFamily):
             fan_speed,
         ])
         data.extend((0).to_bytes(2, byteorder='little'))
-        return self._build_frame(self.FIRST_PACKET_ID, self.SET_PARAMS, data)
+        frame_type = self.SAVE_PARAMS if request.get("_save_state") else self.SET_PARAMS
+        return self._build_frame(self.FIRST_PACKET_ID, frame_type, data)
 
     @property
     def _packages(self) -> list:

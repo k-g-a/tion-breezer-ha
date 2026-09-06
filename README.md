@@ -19,7 +19,21 @@ The BLE reliability changes include:
 - removal of nested connect/disconnect calls in climate commands;
 - a one-minute retry interval after a failed poll instead of ten minutes.
 
-Connections remain operation-scoped. Home Assistant explicitly recommends not reusing a `BleakClient` between connections, and retaining one connection per breezer would consume scarce adapter connection slots in multi-device installations.
+The integration keeps one persistent BLE connection per configured breezer. This avoids the Home Assistant/BlueZ backend-selection failures observed after repeated 4S reconnects, at the cost of consuming one adapter connection slot per breezer.
+
+## Tion 4S controls and diagnostics
+
+In addition to power, fan, climate, and air-source controls, Tion 4S devices expose:
+
+- persisted sound- and light-indication switches;
+- filter-resource and device-error reset buttons;
+- device-problem, filter-replacement, heater-activity, timer, and MagicAir binary states;
+- controller and power-board temperatures;
+- heater output and installed-heater rating;
+- operating time, fan time, airflow counter, and calculated total airflow;
+- maximum fan speed, communication source, and active EC/WS codes.
+
+The error-reset action is allowed while critical errors are active. Other ordinary state changes remain protected until the device reports that the critical condition has cleared.
 
 ## Manual installation
 

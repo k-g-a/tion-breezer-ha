@@ -168,3 +168,151 @@ def test_reset_discards_incomplete_fragment_sequence():
 
     assert breezer._collect_message(packets[-1]) is False
     assert breezer._data == bytearray()
+
+
+def test_decode_exposes_all_regular_4s_state_fields():
+    breezer = TionS4("dummy")
+    response = bytearray(31)
+    response[0] = 0b11101101
+    response[1] = 0b00011100
+    response[2] = 1
+    response[3] = 23
+    response[4] = 5
+    response[5] = 0xFE
+    response[6] = 18
+    response[7] = 27
+    response[8] = 42
+    response[9:13] = (12345).to_bytes(4, byteorder="little")
+    response[13:17] = (67890).to_bytes(4, byteorder="little")
+    response[17:21] = (365 * 86400).to_bytes(4, byteorder="little")
+    response[21:25] = (2400).to_bytes(4, byteorder="little")
+    response[25:29] = ((1 << 2) | (1 << 24)).to_bytes(4, byteorder="little")
+    response[29] = 6
+    response[30] = 55
+
+    breezer._decode_response(response)
+    state = breezer._generate_model_specific_json()
+
+    assert breezer.heating == "on"
+    assert breezer.filter_remain == 365
+    assert state == {
+        "light": "on",
+        "active_error_codes": ["EC03", "WS01"],
+        "device_problem": True,
+        "heater_active": True,
+        "filter_change_required": True,
+        "heater_power_rating": 1000,
+        "magicair_connected": True,
+        "magicair_auto": True,
+        "timer_active": True,
+        "comm_source": "user",
+        "pcb_control_temp": 27,
+        "pcb_power_temp": 42,
+        "work_time": 12345,
+        "fan_time": 67890,
+        "airflow_counter": 2400,
+        "airflow_total": 10,
+        "max_fan_speed": 6,
+        "heater_output": 55,
+    }
+
+
+def test_4s_active_heating_uses_heater_output_not_raw_state_bit():
+    breezer = TionS4("dummy")
+    response = bytearray(31)
+    response[0] = (1 << 0) | (1 << 3) | (1 << 4)
+    response[4] = 1
+    response[30] = 0
+
+    breezer._decode_response(response)
+
+    assert breezer.heater == "off"
+    assert breezer.heating == "off"
+    assert breezer._generate_model_specific_json()["heater_active"] is False
+
+    response[30] = 25
+    breezer._decode_response(response)
+
+    assert breezer.heating == "on"
+    assert breezer._generate_model_specific_json()["heater_active"] is True
+
+
+def _settings(**changes):
+    settings = {
+        "state": "on",
+        "sound": "on",
+        "light": "on",
+        "heater": "on",
+        "mode": "outside",
+        "heater_temp": 22,
+        "fan_speed": 3,
+    }
+    settings.update(changes)
+    return settings
+
+
+def test_sound_and_light_preferences_use_persisted_state_frame():
+    breezer = TionS4("dummy")
+
+    request = breezer._encode_request(_settings(_save_state=True))
+
+    assert request[5:7] == bytes(breezer.SAVE_PARAMS)
+
+
+@pytest.mark.parametrize(
+    "action, expected_flag",
+    [("reset_errors", 1 << 6), ("reset_filter", 1 << 7)],
+)
+def test_maintenance_action_flags_are_encoded(action, expected_flag):
+    breezer = TionS4("dummy")
+
+    request = breezer._encode_request(_settings(**{action: True}))
+
+    assert request[15] & expected_flag
+    assert request[5:7] == bytes(breezer.SET_PARAMS)
+
+
+def test_reset_errors_bypasses_critical_error_guard():
+    breezer = TionS4("dummy")
+    breezer._error_code = (1 << 0) | (1 << 10)
+
+    breezer._validate_state_before_write({"reset_errors": True})
+
+    with pytest.raises(TionException, match="EC01, EC11"):
+        breezer._validate_state_before_write({"reset_filter": True})
+
+
+@pytest.mark.asyncio
+async def test_set_marks_sound_and_light_changes_as_persistent(monkeypatch):
+    breezer = TionS4("dummy")
+    response = bytearray(31)
+    response[4] = 1
+    send_request = AsyncMock()
+    monkeypatch.setattr(breezer, "connect", AsyncMock())
+    monkeypatch.setattr(breezer, "_try_write", AsyncMock())
+    monkeypatch.setattr(breezer, "_send_request", send_request)
+    monkeypatch.setattr(breezer, "_get_data_from_breezer", AsyncMock(return_value=response))
+
+    await breezer.set({"sound": "off"})
+
+    request = send_request.await_args.args[0]
+    assert request[5:7] == bytes(breezer.SAVE_PARAMS)
+
+
+@pytest.mark.asyncio
+async def test_reset_errors_executes_while_critical_errors_are_active(monkeypatch):
+    breezer = TionS4("dummy")
+    response = bytearray(31)
+    response[4] = 1
+    response[25:29] = ((1 << 0) | (1 << 10)).to_bytes(4, byteorder="little")
+    send_request = AsyncMock()
+    monkeypatch.setattr(breezer, "connect", AsyncMock())
+    monkeypatch.setattr(breezer, "_try_write", AsyncMock())
+    monkeypatch.setattr(breezer, "_send_request", send_request)
+    monkeypatch.setattr(breezer, "_get_data_from_breezer", AsyncMock(return_value=response))
+
+    await breezer.set({"reset_errors": True})
+
+    request = send_request.await_args.args[0]
+    assert request[15] & (1 << 6)
+    assert breezer.active_error_codes == ["EC01", "EC11"]

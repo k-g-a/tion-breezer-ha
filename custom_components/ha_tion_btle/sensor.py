@@ -5,7 +5,7 @@ import logging
 from datetime import timedelta
 
 from homeassistant.components.sensor import SensorEntityDescription, SensorDeviceClass, SensorStateClass, SensorEntity
-from homeassistant.const import UnitOfTemperature
+from homeassistant.const import PERCENTAGE, UnitOfPower, UnitOfTemperature, UnitOfTime, UnitOfVolume
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import EntityCategory
@@ -61,6 +61,82 @@ SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
     ),
 )
 
+S4_SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
+    SensorEntityDescription(
+        key="pcb_control_temp",
+        name="Controller board temperature",
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    SensorEntityDescription(
+        key="pcb_power_temp",
+        name="Power board temperature",
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    SensorEntityDescription(
+        key="heater_output",
+        name="Heater output",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:radiator",
+    ),
+    SensorEntityDescription(
+        key="airflow_total",
+        name="Total airflow",
+        native_unit_of_measurement=UnitOfVolume.CUBIC_METERS,
+        device_class=SensorDeviceClass.VOLUME,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        icon="mdi:weather-windy",
+    ),
+    SensorEntityDescription(
+        key="work_time",
+        name="Operating time",
+        native_unit_of_measurement=UnitOfTime.SECONDS,
+        device_class=SensorDeviceClass.DURATION,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    SensorEntityDescription(
+        key="fan_time",
+        name="Fan time",
+        native_unit_of_measurement=UnitOfTime.SECONDS,
+        device_class=SensorDeviceClass.DURATION,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    SensorEntityDescription(
+        key="airflow_counter",
+        name="Raw airflow counter",
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    SensorEntityDescription(
+        key="heater_power_rating",
+        name="Heater power rating",
+        native_unit_of_measurement=UnitOfPower.WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    SensorEntityDescription(
+        key="max_fan_speed",
+        name="Maximum fan speed",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        icon="mdi:fan-plus",
+    ),
+    SensorEntityDescription(
+        key="comm_source",
+        name="Communication source",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        icon="mdi:remote",
+    ),
+)
+
 
 async def async_setup_platform(_hass: HomeAssistant, _config, _async_add_entities, _discovery_info=None):
     _LOGGER.critical("Sensors configuration via configuration.yaml is not supported!")
@@ -70,8 +146,11 @@ async def async_setup_platform(_hass: HomeAssistant, _config, _async_add_entitie
 async def async_setup_entry(hass: HomeAssistant, config: ConfigEntry, async_add_entities):
     """Set up the sensor entry"""
     tion_instance = hass.data[DOMAIN][config.unique_id]
+    descriptions = list(SENSOR_TYPES)
+    if tion_instance.model == "S4":
+        descriptions.extend(S4_SENSOR_TYPES)
     entities: list[TionSensor] = [
-        TionSensor(description, tion_instance) for description in SENSOR_TYPES]
+        TionSensor(description, tion_instance) for description in descriptions]
     async_add_entities(entities)
 
     return True
