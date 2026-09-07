@@ -470,7 +470,7 @@ class Tion:
         notifications_enabled = (
             self.__notifications_enabled and notification_client is client
         )
-        self._invalidate_notifications(client)
+        self._invalidate_notifications()
         if client is not None and notifications_enabled and client.is_connected:
             try:
                 await client.stop_notify(self.uuid_notify)
