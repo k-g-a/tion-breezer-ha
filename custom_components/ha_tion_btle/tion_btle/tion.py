@@ -53,9 +53,12 @@ class TionDelegation:
     def __init__(self):
         self._data: List[bytearray] = []
 
-    def handleNotification(self, handle: int, data: bytearray):
-        self._data.append(data)
-        _LOGGER.debug(f"Got data in {handle} response {bytes(data).hex()}")
+    def handleNotification(self, handle: object, data: bytearray):
+        # Do not retain a backend-owned mutable buffer. Some Bleak backends
+        # reuse notification storage after the callback returns.
+        packet = bytearray(data)
+        self._data.append(packet)
+        _LOGGER.debug(f"Got data in {handle} response {bytes(packet).hex()}")
         _LOGGER.debug(f"{self._data=}")
 
     @property
@@ -106,6 +109,8 @@ class Tion:
         self._error_code: int = 0
         self.__failed_connects: int = 0
         self.__notifications_enabled: bool = False
+        self.__notification_client: BleakClientWithServiceCache | None = None
+        self.__notification_generation = 0
         self.have_breezer_state: bool = False
         self._semaphore = Semaphore(1)
 
@@ -142,6 +147,27 @@ class Tion:
     def _response_frame_type(self) -> bytes | None:
         """Return the frame type of the most recently assembled response."""
         return None
+
+    def _invalidate_notifications(
+        self,
+        client: BleakClientWithServiceCache | None = None,
+    ) -> None:
+        """Invalidate callbacks belonging to the current notification session."""
+        if client is not None and self.__notification_client is not client:
+            return
+        self.__notifications_enabled = False
+        self.__notification_client = None
+        self.__notification_generation += 1
+
+    def _notifications_are_ready(self) -> bool:
+        """Return whether the connected client owns the active subscription."""
+        client = self._btle
+        return bool(
+            client is not None
+            and client.is_connected
+            and self.__notifications_enabled
+            and self.__notification_client is client
+        )
 
     async def _update_additional_state_from_breezer(self) -> None:
         """Read model-specific state that is not included in the main response."""
@@ -370,7 +396,7 @@ class Tion:
             )
             if is_current:
                 self.have_breezer_state = False
-                self.__notifications_enabled = False
+                self._invalidate_notifications(client)
                 self._btle = None
                 self._active_ble_device = None
 
@@ -414,19 +440,18 @@ class Tion:
     @final
     async def _connect(self, need_notifications: bool = True):
         _LOGGER.debug(f"Connecting. {self.connection_status=}.")
-        if self.connection_status == "disc":
-            try:
+        try:
+            if self.connection_status == "disc":
                 await self._try_connect()
-            except Exception:
-                # Connector and protocol failures both require the same clean
-                # reconnect path, so cleanup must not be limited to BleakError.
-                await self.reset_connection()
-                raise
-
             if need_notifications:
                 await self._enable_notifications()
             else:
                 _LOGGER.debug("Notifications was not requested")
+        except Exception:
+            # Connector, subscription, and protocol failures all require the
+            # same clean reconnect path.
+            await self.reset_connection()
+            raise
         _LOGGER.debug(f"_connect done. {self.connection_status=}.")
 
     @final
@@ -441,7 +466,20 @@ class Tion:
             client.is_connected if client is not None else None,
             device.details.get("path") if device is not None and isinstance(device.details, dict) else None,
         )
-        self.__notifications_enabled = False
+        notification_client = self.__notification_client
+        notifications_enabled = (
+            self.__notifications_enabled and notification_client is client
+        )
+        self._invalidate_notifications(client)
+        if client is not None and notifications_enabled and client.is_connected:
+            try:
+                await client.stop_notify(self.uuid_notify)
+            except Exception as err:
+                _LOGGER.debug(
+                    "Could not stop notifications while disconnecting from %s: %s",
+                    self.mac,
+                    err,
+                )
         try:
             if client is not None:
                 # Always call disconnect when a client object exists.  A BLE
@@ -482,15 +520,45 @@ class Tion:
     @final
     async def _enable_notifications(self):
         _LOGGER.debug(f"Enabling notification. {self.connection_status=}")
-        if self._btle is None or not self._btle.is_connected:
+        client = self._btle
+        if client is None or not client.is_connected:
             raise exc.BleakError(f"Tion breezer {self.mac} is not connected")
-        try:
-            await self._btle.start_notify(self.uuid_notify, self._delegation.handleNotification)
-        except exc.BleakError as e:
-            _LOGGER.warning("Got exception %s while enabling notifications!" % str(e))
-            raise e
 
+        if self._notifications_are_ready():
+            _LOGGER.debug("Reusing active notification subscription for %s", self.mac)
+            return
+
+        self._invalidate_notifications()
+        generation = self.__notification_generation
+
+        def _handle_notification(handle: object, data: bytearray) -> None:
+            if (
+                self._btle is not client
+                or self.__notification_client is not client
+                or not self.__notifications_enabled
+                or self.__notification_generation != generation
+            ):
+                _LOGGER.debug(
+                    "Ignoring notification from stale BLE session: address=%s client_id=%s "
+                    "current_client_id=%s generation=%s current_generation=%s",
+                    self.mac,
+                    id(client),
+                    id(self._btle) if self._btle is not None else None,
+                    generation,
+                    self.__notification_generation,
+                )
+                return
+            self._delegation.handleNotification(handle, data)
+
+        self.__notification_client = client
         self.__notifications_enabled = True
+        try:
+            await client.start_notify(self.uuid_notify, _handle_notification)
+        except Exception as err:
+            self._invalidate_notifications(client)
+            _LOGGER.warning("Got exception %s while enabling notifications!", err)
+            raise
+
         _LOGGER.debug(f"_enable_notifications done")
         return
 
@@ -653,14 +721,14 @@ class Tion:
     @final
     async def connect(self):
         """Ensure the persistent BLE connection is ready."""
-        if self._btle is not None and self._btle.is_connected:
+        if self._notifications_are_ready():
             _LOGGER.debug("Reusing persistent BLE connection to %s", self.mac)
             return
 
         async with self._semaphore:
             # Another waiter may have established the connection while this
             # task waited for the semaphore.
-            if self._btle is not None and self._btle.is_connected:
+            if self._notifications_are_ready():
                 return
             self.have_breezer_state = False
             await self._connect()

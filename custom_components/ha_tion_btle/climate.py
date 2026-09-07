@@ -18,6 +18,7 @@ from . import TionInstance
 from .const import *
 
 _LOGGER = logging.getLogger(__name__)
+_BASE_PRESET_MODES = (PRESET_NONE, PRESET_BOOST, PRESET_SLEEP)
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
     {
@@ -59,7 +60,7 @@ class TionClimateEntity(ClimateEntity, CoordinatorEntity):
     _attr_precision = PRECISION_WHOLE
     _attr_target_temperature_step = 1
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
-    _attr_preset_modes = [PRESET_NONE, PRESET_BOOST, PRESET_SLEEP]
+    _attr_preset_modes = list(_BASE_PRESET_MODES)
     _attr_preset_mode = PRESET_NONE
     _attr_supported_features = ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.FAN_MODE | ClimateEntityFeature.PRESET_MODE
     _attr_icon = 'mdi:air-purifier'
@@ -85,7 +86,10 @@ class TionClimateEntity(ClimateEntity, CoordinatorEntity):
         self._managed_preset_mode = PRESET_NONE
         self._fan_speed = 1
 
-        self._attr_preset_modes = list(type(self)._attr_preset_modes)
+        # Home Assistant exposes several ``_attr_*`` values through class-level
+        # descriptors. Reading this value back through ``type(self)`` can
+        # therefore return a property object instead of our configured list.
+        self._attr_preset_modes = list(_BASE_PRESET_MODES)
         if self._away_temp:
             self._attr_preset_modes.append(PRESET_AWAY)
 
