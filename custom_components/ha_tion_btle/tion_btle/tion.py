@@ -6,7 +6,7 @@ import inspect
 import logging
 from asyncio import Semaphore
 from typing import Callable, List, final
-from time import localtime, strftime
+from time import localtime, monotonic, strftime
 
 from bleak import exc
 from bleak.backends.device import BLEDevice
@@ -78,6 +78,7 @@ class TionException(Exception):
 
 
 class Tion:
+    AIR_VALVE_TRANSITION_DELAY = 15.0
     statuses = ['off', 'on']
     modes = ['recirculation', 'mixed']  # 'recirculation', 'mixed' and 'outside', as Index exception
     uuid_notify: str = ""
@@ -107,6 +108,7 @@ class Tion:
         self._sound: bool = False
         self._filter_remain: float = 0.0
         self._error_code: int = 0
+        self._last_air_valve_transition_at: float | None = None
         self.__failed_connects: int = 0
         self.__notifications_enabled: bool = False
         self.__notification_client: BleakClientWithServiceCache | None = None
@@ -329,10 +331,31 @@ class Tion:
             merged_settings["_save_state"] = bool({"sound", "light"} & new_settings.keys())
             self._validate_state_before_write(new_settings)
 
+            valve_changes = [
+                name
+                for name in ("state", "mode")
+                if name in new_settings and new_settings[name] != current_settings[name]
+            ]
+            if valve_changes and self._last_air_valve_transition_at is not None:
+                elapsed = monotonic() - self._last_air_valve_transition_at
+                delay = self.AIR_VALVE_TRANSITION_DELAY - elapsed
+                if delay > 0:
+                    _LOGGER.info(
+                        "Waiting %.1f seconds before changing Tion %s; the air valve is still settling",
+                        delay,
+                        " and ".join(valve_changes),
+                    )
+                    await asyncio.sleep(delay)
+
             encoded_request = self._encode_request(merged_settings)
             _LOGGER.debug("Will write %s", encoded_request)
             self._prepare_response()
             await self._send_request(encoded_request)
+            if valve_changes:
+                # Start the settling window once the transition command has
+                # reached the breezer. Keep it even if the response later
+                # times out: the valve may still be moving.
+                self._last_air_valve_transition_at = monotonic()
             raw = await self._get_data_from_breezer(self._expected_state_response_type())
             self._decode_response(raw)
             self._validate_state_before_write(new_settings)
