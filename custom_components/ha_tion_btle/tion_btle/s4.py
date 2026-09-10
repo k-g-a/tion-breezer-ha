@@ -154,16 +154,14 @@ class TionS4(TionLiteFamily):
         return codes
 
     def _validate_state_before_write(self, requested_changes: dict | None = None) -> None:
-        if requested_changes and requested_changes.get("reset_errors"):
-            return
+        """Leave command safety and error recovery to the breezer firmware.
 
-        critical_errors = [code for code in self.active_error_codes if code.startswith("EC")]
-        if critical_errors:
-            raise TionException(
-                "s4 set",
-                "Refusing to change Tion 4S state while the device reports critical error(s): "
-                + ", ".join(critical_errors),
-            )
+        In particular, EC01-EC03 describe valve-position faults. Recovering from
+        one can require another power transition, so blocking every write while
+        an EC bit is present creates an integration-side deadlock. The error
+        mask remains exposed through active_error_codes/device_problem, and the
+        device may still reject commands it considers unsafe.
+        """
 
     def _next_request_id(self) -> int:
         self._request_id = (self._request_id + 1) & 0xFFFFFFFF
@@ -240,9 +238,9 @@ class TionS4(TionLiteFamily):
             await self.connect()
 
             if duration_seconds > 0:
-                # Use a fresh regular-state response for the same safety check
-                # applied to every other state-changing command. Cancellation
-                # remains possible even while the device reports an error.
+                # Refresh regular state before starting Turbo. Device errors
+                # remain visible but do not create an integration-side command
+                # deadlock; the firmware decides whether Turbo is acceptable.
                 self._prepare_response()
                 await self._try_write(request=self.command_getStatus)
                 state = await self._get_data_from_breezer(self.STATE_RESPONSE_PARAMS)
