@@ -1,8 +1,9 @@
 import binascii
-from unittest.mock import AsyncMock, call
+from unittest.mock import AsyncMock, Mock, call
 
 import pytest
 
+import tion_btle.tion as tion_module
 from tion_btle.s4 import TionS4
 from tion_btle.tion import TionException
 
@@ -101,6 +102,93 @@ async def test_set_uses_device_response_as_source_of_truth(monkeypatch):
     ]
     send_request.assert_awaited_once()
     disconnect.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("current_power", "current_mode", "changes"),
+    [
+        (True, 0, {"state": "off"}),
+        (False, 0, {"state": "on"}),
+        (True, 0, {"mode": "recirculation"}),
+        (True, 1, {"mode": "outside"}),
+    ],
+)
+async def test_power_and_air_source_transitions_share_valve_settling_delay(
+    monkeypatch, current_power, current_mode, changes
+):
+    breezer = TionS4("dummy")
+    breezer._last_air_valve_transition_at = 100.0
+    state = bytearray(31)
+    state[0] = int(current_power)
+    state[2] = current_mode
+    state[4] = 1
+    sleep = AsyncMock()
+    clock = Mock(side_effect=[105.0, 115.0])
+    monkeypatch.setattr(tion_module.asyncio, "sleep", sleep)
+    monkeypatch.setattr(tion_module, "monotonic", clock)
+    monkeypatch.setattr(breezer, "connect", AsyncMock())
+    monkeypatch.setattr(breezer, "_try_write", AsyncMock())
+    monkeypatch.setattr(breezer, "_send_request", AsyncMock())
+    monkeypatch.setattr(
+        breezer,
+        "_get_data_from_breezer",
+        AsyncMock(side_effect=[state, state, bytearray(4)]),
+    )
+
+    await breezer.set(changes)
+
+    assert sleep.await_args.args[0] == pytest.approx(10.0)
+    assert breezer._last_air_valve_transition_at == 115.0
+
+
+@pytest.mark.asyncio
+async def test_first_valve_transition_is_immediate(monkeypatch):
+    breezer = TionS4("dummy")
+    state = bytearray(31)
+    state[4] = 1
+    sleep = AsyncMock()
+    monkeypatch.setattr(tion_module.asyncio, "sleep", sleep)
+    monkeypatch.setattr(tion_module, "monotonic", Mock(return_value=100.0))
+    monkeypatch.setattr(breezer, "connect", AsyncMock())
+    monkeypatch.setattr(breezer, "_try_write", AsyncMock())
+    monkeypatch.setattr(breezer, "_send_request", AsyncMock())
+    monkeypatch.setattr(
+        breezer,
+        "_get_data_from_breezer",
+        AsyncMock(side_effect=[state, state, bytearray(4)]),
+    )
+
+    await breezer.set({"state": "on"})
+
+    sleep.assert_not_awaited()
+    assert breezer._last_air_valve_transition_at == 100.0
+
+
+@pytest.mark.asyncio
+async def test_non_valve_changes_are_not_delayed(monkeypatch):
+    breezer = TionS4("dummy")
+    breezer._last_air_valve_transition_at = 100.0
+    state = bytearray(31)
+    state[4] = 1
+    sleep = AsyncMock()
+    clock = Mock()
+    monkeypatch.setattr(tion_module.asyncio, "sleep", sleep)
+    monkeypatch.setattr(tion_module, "monotonic", clock)
+    monkeypatch.setattr(breezer, "connect", AsyncMock())
+    monkeypatch.setattr(breezer, "_try_write", AsyncMock())
+    monkeypatch.setattr(breezer, "_send_request", AsyncMock())
+    monkeypatch.setattr(
+        breezer,
+        "_get_data_from_breezer",
+        AsyncMock(side_effect=[state, state, bytearray(4)]),
+    )
+
+    await breezer.set({"fan_speed": 2})
+
+    sleep.assert_not_awaited()
+    clock.assert_not_called()
+    assert breezer._last_air_valve_transition_at == 100.0
 
 
 def test_turbo_status_request_uses_native_4s_frame_type_and_valid_crc():
