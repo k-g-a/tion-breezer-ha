@@ -57,12 +57,11 @@ def test_decode_exposes_critical_errors_and_warnings():
     assert breezer._generate_model_specific_json()["active_error_codes"] == ["EC01", "EC02", "WS02"]
 
 
-def test_critical_device_error_blocks_writes():
+def test_critical_device_error_does_not_block_recovery_writes():
     breezer = TionS4("dummy")
     breezer._error_code = (1 << 0) | (1 << 1)
 
-    with pytest.raises(TionException, match="EC01, EC02"):
-        breezer._validate_state_before_write()
+    breezer._validate_state_before_write()
 
 
 def test_device_warning_does_not_block_writes():
@@ -261,23 +260,28 @@ async def test_native_boost_cancel_bypasses_state_error_guard(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_native_boost_enable_is_blocked_by_fresh_critical_error(monkeypatch):
+async def test_native_boost_enable_is_left_to_firmware_during_device_error(monkeypatch):
     breezer = TionS4("dummy")
     state = bytearray(31)
     state[25:29] = (1 << 2).to_bytes(4, byteorder="little")
+    turbo = bytearray([1, 0x2C, 0x01, 0])
     send_request = AsyncMock()
     reset_connection = AsyncMock()
     monkeypatch.setattr(breezer, "connect", AsyncMock())
     monkeypatch.setattr(breezer, "_try_write", AsyncMock())
     monkeypatch.setattr(breezer, "_send_request", send_request)
-    monkeypatch.setattr(breezer, "_get_data_from_breezer", AsyncMock(return_value=state))
+    monkeypatch.setattr(
+        breezer,
+        "_get_data_from_breezer",
+        AsyncMock(side_effect=[state, turbo, state]),
+    )
     monkeypatch.setattr(breezer, "reset_connection", reset_connection)
 
-    with pytest.raises(TionException, match="EC03"):
-        await breezer.set_boost(300)
+    await breezer.set_boost(300)
 
-    send_request.assert_not_awaited()
-    reset_connection.assert_awaited_once()
+    send_request.assert_awaited_once()
+    reset_connection.assert_not_awaited()
+    assert breezer.active_error_codes == ["EC03"]
 
 
 def test_invalid_state_response_size_is_rejected():
@@ -454,14 +458,12 @@ def test_maintenance_action_flags_are_encoded(action, expected_flag):
     assert request[5:7] == bytes(breezer.SET_PARAMS)
 
 
-def test_reset_errors_bypasses_critical_error_guard():
+def test_error_mask_does_not_block_maintenance_actions():
     breezer = TionS4("dummy")
     breezer._error_code = (1 << 0) | (1 << 10)
 
     breezer._validate_state_before_write({"reset_errors": True})
-
-    with pytest.raises(TionException, match="EC01, EC11"):
-        breezer._validate_state_before_write({"reset_filter": True})
+    breezer._validate_state_before_write({"reset_filter": True})
 
 
 @pytest.mark.asyncio
