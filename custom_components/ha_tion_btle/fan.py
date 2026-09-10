@@ -101,7 +101,7 @@ class TionFan(FanEntity, CoordinatorEntity):
         self._saved_fan_mode = None
         if self.coordinator.supports_native_boost:
             self._attr_preset_mode = (
-                PRESET_BOOST if self.coordinator.data.get("boost_active") else PRESET_NONE
+                PRESET_BOOST if self.coordinator.data.get("boost_active") else None
             )
 
         _LOGGER.debug(f"Init of fan  {self.name} ({instance.unique_id})")
@@ -172,7 +172,11 @@ class TionFan(FanEntity, CoordinatorEntity):
                 await self.coordinator.set(fan_speed=self._saved_fan_mode)
                 self._saved_fan_mode = None
 
-        self._attr_preset_mode = preset_mode
+        # FanEntity treats every non-None preset as an active mode when it
+        # calculates is_on. PRESET_NONE is a service/UI choice, not an active
+        # preset state; publishing the literal "none" keeps an otherwise-off
+        # fan shown as on.
+        self._attr_preset_mode = None if preset_mode == PRESET_NONE else preset_mode
 
     async def async_turn_on(self, percentage: int | None = None, preset_mode: str | None = None, **kwargs, ) -> None:
         target_speed = 2 if self._saved_fan_mode is None else self._saved_fan_mode
@@ -196,6 +200,6 @@ class TionFan(FanEntity, CoordinatorEntity):
         self._attr_percentage = self.mode2percent() if self._attr_is_on else 0  # should check attr to avoid deadlock
         if self.coordinator.supports_native_boost:
             self._attr_preset_mode = (
-                PRESET_BOOST if self.coordinator.data.get("boost_active") else PRESET_NONE
+                PRESET_BOOST if self.coordinator.data.get("boost_active") else None
             )
         self.async_write_ha_state()

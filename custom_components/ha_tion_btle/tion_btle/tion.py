@@ -722,7 +722,27 @@ class Tion:
     async def connect(self):
         """Ensure the persistent BLE connection is ready."""
         if self._notifications_are_ready():
-            _LOGGER.debug("Reusing persistent BLE connection to %s", self.mac)
+            active_path = (
+                self._active_ble_device.details.get("path")
+                if self._active_ble_device is not None
+                and isinstance(self._active_ble_device.details, dict)
+                else None
+            )
+            latest_device = self._next_btle_device
+            latest_path = (
+                latest_device.details.get("path")
+                if isinstance(latest_device, BLEDevice)
+                and isinstance(latest_device.details, dict)
+                else None
+            )
+            _LOGGER.debug(
+                "Reusing persistent BLE connection: address=%s client_id=%s "
+                "active_path=%s latest_advertisement_path=%s",
+                self.mac,
+                id(self._btle),
+                active_path,
+                latest_path,
+            )
             return
 
         async with self._semaphore:
