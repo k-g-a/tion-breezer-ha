@@ -38,6 +38,7 @@ class TionLiteFamily(Tion):
         self._header: bytearray = bytearray()
         self._have_full_package: bool = False
         self._got_new_sequence: bool = False
+        self._first_fragment: bytearray = bytearray()
         self.have_breezer_state: bool = False
 
         # states
@@ -74,6 +75,7 @@ class TionLiteFamily(Tion):
         self._header = bytearray()
         self._have_full_package = False
         self._got_new_sequence = False
+        self._first_fragment = bytearray()
 
     @final
     def _response_frame_type(self) -> bytes | None:
@@ -95,9 +97,13 @@ class TionLiteFamily(Tion):
 
         if packet_id == self.FIRST_PACKET_ID:
             if self._got_new_sequence:
+                if package == self._first_fragment:
+                    _LOGGER.debug("Ignoring duplicated first packet")
+                    return False
                 _LOGGER.warning("Got a new first packet before the previous response completed; discarding it")
             self._reset_message_assembly()
             self._data = package
+            self._first_fragment = bytearray(package)
             self._got_new_sequence = True
             return False
 
@@ -110,6 +116,20 @@ class TionLiteFamily(Tion):
         elif packet_id == self.MIDDLE_PACKET_ID:
             if not self._got_new_sequence:
                 _LOGGER.warning("Ignoring middle packet without a matching first packet")
+                return False
+            expected_size = int.from_bytes(self._data[1:3], byteorder="little") + 1
+            candidate_size = len(self._data) + len(package) - 1
+            if candidate_size >= expected_size:
+                # A middle packet cannot complete or exceed a frame. BlueZ
+                # may deliver an already-received fragment twice after a
+                # peripheral power-cycle; ignore the excess copy and retain
+                # the valid sequence for its END packet.
+                _LOGGER.debug(
+                    "Ignoring duplicated or excess middle packet: assembled=%s candidate=%s expected=%s",
+                    len(self._data),
+                    candidate_size,
+                    expected_size,
+                )
                 return False
             self._data.extend(package[1:])
             return False

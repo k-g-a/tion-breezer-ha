@@ -4,6 +4,7 @@ import abc
 import asyncio
 import inspect
 import logging
+import math
 from asyncio import Semaphore
 from typing import Callable, List, final
 from time import localtime, monotonic, strftime
@@ -75,6 +76,10 @@ class TionException(Exception):
         super().__init__(message)
         self.expression = expression
         self.message = message
+
+
+class TionCommandRejected(TionException):
+    """The breezer responded, but did not apply the requested state."""
 
 
 class Tion:
@@ -233,6 +238,7 @@ class Tion:
             "filter_remain": self.filter_remain,
             "time": strftime("%H:%M", localtime()),
             "request_error_code": self._error_code,
+            "valve_transition_time_left": self.valve_transition_time_left,
             "model": self.model,
         }
 
@@ -263,7 +269,7 @@ class Tion:
             await self._try_write(request=self.command_getStatus)
             response = await self._get_data_from_breezer(self._expected_state_response_type())
             self._decode_response(response)
-            await self._update_additional_state_from_breezer()
+            await self._update_additional_state_safely()
         except Exception:
             await self.reset_connection()
             raise
@@ -359,10 +365,77 @@ class Tion:
             raw = await self._get_data_from_breezer(self._expected_state_response_type())
             self._decode_response(raw)
             self._validate_state_before_write(new_settings)
-            await self._update_additional_state_from_breezer()
+            await self._update_additional_state_safely()
+            self._verify_applied_state(new_settings, valve_changes)
+        except TionCommandRejected:
+            # Communication succeeded and the response is useful state. Do
+            # not discard the persistent session merely because firmware
+            # refused a command while reporting an active device problem.
+            raise
         except Exception:
             await self.reset_connection()
             raise
+
+    async def _update_additional_state_safely(self) -> None:
+        """Keep optional model-specific reads from invalidating regular state."""
+        try:
+            await self._update_additional_state_from_breezer()
+        except Exception as err:
+            if hasattr(self, "_boost_status_available"):
+                self._boost_status_available = False
+            _LOGGER.warning(
+                "Optional %s state update failed; keeping the valid regular state: %s",
+                self.model,
+                err,
+            )
+            self._prepare_response()
+            self.have_breezer_state = True
+
+    def _verify_applied_state(self, requested: dict, valve_changes: list[str]) -> None:
+        """Raise when firmware returned a stable state that contradicts a command."""
+        actual = self.__generate_common_json()
+        actual.update(self._generate_model_specific_json())
+        active_codes = list(getattr(self, "active_error_codes", []))
+        critical_codes = [code for code in active_codes if code.startswith("EC")]
+
+        if requested.get("reset_errors") and critical_codes:
+            raise TionCommandRejected(
+                "set",
+                "Tion processed the error-reset request but still reports active errors: "
+                + ", ".join(critical_codes),
+            )
+
+        if requested.get("reset_filter") and actual.get("filter_change_required"):
+            raise TionCommandRejected(
+                "set",
+                "Tion processed the filter-reset request but still reports that filter replacement is required",
+            )
+
+        mismatches = {
+            key: (expected, actual.get(key))
+            for key, expected in requested.items()
+            if key in {"state", "heater", "sound", "light", "mode", "fan_speed", "heater_temp"}
+            and actual.get(key) != expected
+        }
+        if not mismatches:
+            return
+
+        if not critical_codes:
+            # Firmware can clamp settings and power/air-source responses may
+            # legitimately retain old values while the valve is moving. The
+            # device response remains the published source of truth.
+            _LOGGER.debug("Tion adjusted or has not yet applied requested state: %s", mismatches)
+            return
+
+        mismatch_text = ", ".join(
+            f"{key} requested {expected!r}, device reports {reported!r}"
+            for key, (expected, reported) in mismatches.items()
+        )
+        error_text = f"; active errors: {', '.join(active_codes)}" if active_codes else ""
+        raise TionCommandRejected(
+            "set",
+            f"Tion did not apply the command ({mismatch_text}){error_text}",
+        )
 
     async def set_boost(self, duration_seconds: int) -> None:
         """Set a firmware-managed boost duration when supported by the model."""
@@ -370,6 +443,14 @@ class Tion:
 
     def _validate_state_before_write(self, requested_changes: dict | None = None) -> None:
         """Reject a write when a model reports a state that makes it unsafe."""
+
+    @property
+    def valve_transition_time_left(self) -> int:
+        """Return seconds remaining in the shared physical-valve settling window."""
+        if self._last_air_valve_transition_at is None:
+            return 0
+        remaining = self.AIR_VALVE_TRANSITION_DELAY - (monotonic() - self._last_air_valve_transition_at)
+        return max(0, math.ceil(remaining))
 
     @final
     @property
@@ -465,6 +546,12 @@ class Tion:
         _LOGGER.debug(f"Connecting. {self.connection_status=}.")
         try:
             if self.connection_status == "disc":
+                if self._btle is not None:
+                    # A backend can report disconnected before its transport
+                    # and notification resources are fully released. Close the
+                    # stale client before selecting either local adapter for a
+                    # replacement connection.
+                    await self._disconnect()
                 await self._try_connect()
             if need_notifications:
                 await self._enable_notifications()

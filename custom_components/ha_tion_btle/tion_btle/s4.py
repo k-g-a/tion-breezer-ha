@@ -50,6 +50,7 @@ class TionS4(TionLiteFamily):
         self._boost_active = False
         self._boost_time_left = 0
         self._boost_error_code = 0
+        self._boost_status_available = False
 
         if mac == "dummy":
             _LOGGER.info("Dummy mode!")
@@ -142,6 +143,7 @@ class TionS4(TionLiteFamily):
             "boost_active": self._boost_active,
             "boost_time_left": self._boost_time_left,
             "boost_error_code": self._boost_error_code,
+            "boost_status_available": self._boost_status_available,
         }
 
     @property
@@ -201,6 +203,7 @@ class TionS4(TionLiteFamily):
             else 0
         )
         self._boost_error_code = response[3]
+        self._boost_status_available = True
         if self._boost_error_code and reject_error:
             raise TionException(
                 "s4 _decode_turbo_response",

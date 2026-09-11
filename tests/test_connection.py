@@ -144,6 +144,27 @@ async def test_connected_client_without_subscription_enables_notifications():
 
 
 @pytest.mark.asyncio
+async def test_reconnect_closes_disconnected_backend_before_selecting_a_new_one(monkeypatch):
+    breezer = TionS4("AA:BB:CC:DD:EE:FF")
+    stale_client = AsyncMock()
+    stale_client.is_connected = False
+    new_client = AsyncMock()
+    new_client.is_connected = True
+    breezer._btle = stale_client
+
+    async def connect_new_client() -> bool:
+        breezer._btle = new_client
+        return True
+
+    monkeypatch.setattr(breezer, "_try_connect", AsyncMock(side_effect=connect_new_client))
+
+    await breezer.connect()
+
+    stale_client.disconnect.assert_awaited_once()
+    new_client.start_notify.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_stale_notification_callback_cannot_duplicate_new_session_packets():
     breezer = TionS4("AA:BB:CC:DD:EE:FF")
     old_client = AsyncMock()

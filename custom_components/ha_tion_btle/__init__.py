@@ -30,7 +30,7 @@ from .const import (
     PLATFORMS,
     TION_SCHEMA,
 )
-from .tion_btle.tion import MaxTriesExceededError, Tion
+from .tion_btle.tion import MaxTriesExceededError, Tion, TionCommandRejected
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -44,6 +44,8 @@ _NEW_DEFAULT_ENABLED_ENTITY_KEYS = frozenset({
     "heater_power_rating",
     "max_fan_speed",
     "comm_source",
+    "active_error_codes",
+    "valve_transition_time_left",
 })
 
 
@@ -123,9 +125,10 @@ class TionInstance(DataUpdateCoordinator):
             pass
 
         self._failure_count = 0
-        self._failure_backoff = (5, 15, 60, 120, 300)
+        self._failure_backoff = (5, 15, 30, 60)
         self._operation_lock = asyncio.Lock()
         self._cancel_boost_expiry_refresh: Callable[[], None] | None = None
+        self._cancel_valve_timer_refresh: Callable[[], None] | None = None
 
         self.__tion: Tion = self.getTion(self.model, btle_device)
         mac_address = self.config[CONF_MAC]
@@ -204,6 +207,7 @@ class TionInstance(DataUpdateCoordinator):
 
         response = self._normalize_response(response)
         self._schedule_boost_expiry_refresh(response)
+        self._schedule_valve_timer_refresh(response)
 
         self.logger.debug(f"Result is {response}")
         return response
@@ -251,7 +255,19 @@ class TionInstance(DataUpdateCoordinator):
             self._record_success()
             normalized = self._normalize_response(response)
             self._schedule_boost_expiry_refresh(normalized)
+            self._schedule_valve_timer_refresh(normalized)
             self.async_set_updated_data(normalized)
+        except TionCommandRejected as e:
+            # The response is valid and must replace optimistic UI state even
+            # though the requested change was not applied.
+            response = await self.__tion.get(skip_update=True)
+            self._record_success()
+            normalized = self._normalize_response(response)
+            self._schedule_boost_expiry_refresh(normalized)
+            self._schedule_valve_timer_refresh(normalized)
+            self.async_set_updated_data(normalized)
+            _LOGGER.warning("Tion rejected state command: %s", e)
+            raise UpdateFailed(f"Tion rejected state command: {e}") from e
         except Exception as e:
             delay = self._record_failure()
             _LOGGER.warning("Tion set failed: %s; delaying the next poll by %s seconds", e, delay)
@@ -275,6 +291,7 @@ class TionInstance(DataUpdateCoordinator):
             self._record_success()
             normalized = self._normalize_response(response)
             self._schedule_boost_expiry_refresh(normalized)
+            self._schedule_valve_timer_refresh(normalized)
             self.async_set_updated_data(normalized)
         except Exception as e:
             delay = self._record_failure()
@@ -306,11 +323,44 @@ class TionInstance(DataUpdateCoordinator):
         self._cancel_boost_expiry_refresh = None
         await self.async_request_refresh()
 
+    def _schedule_valve_timer_refresh(self, response: dict) -> None:
+        """Publish a local countdown and confirm state when valve movement ends."""
+        if self._cancel_valve_timer_refresh is not None:
+            self._cancel_valve_timer_refresh()
+            self._cancel_valve_timer_refresh = None
+
+        if int(response.get("valve_transition_time_left") or 0) <= 0:
+            return
+
+        self._cancel_valve_timer_refresh = async_call_later(
+            self.hass,
+            1,
+            self._async_refresh_valve_timer,
+        )
+
+    async def _async_refresh_valve_timer(self, _now: datetime.datetime) -> None:
+        """Advance the UI-only valve countdown without polling Bluetooth each second."""
+        self._cancel_valve_timer_refresh = None
+        if not self.last_update_success or not self.data:
+            return
+
+        remaining = self.__tion.valve_transition_time_left
+        updated = dict(self.data)
+        updated["valve_transition_time_left"] = remaining
+        self.async_set_updated_data(updated)
+        if remaining > 0:
+            self._schedule_valve_timer_refresh(updated)
+        else:
+            await self.async_request_refresh()
+
     def _record_success(self) -> None:
         self._failure_count = 0
         self.update_interval = self.__keep_alive
 
     def _record_failure(self) -> int:
+        if self._cancel_valve_timer_refresh is not None:
+            self._cancel_valve_timer_refresh()
+            self._cancel_valve_timer_refresh = None
         delay = self._failure_backoff[min(self._failure_count, len(self._failure_backoff) - 1)]
         self._failure_count += 1
         self.update_interval = datetime.timedelta(seconds=delay)
@@ -333,6 +383,9 @@ class TionInstance(DataUpdateCoordinator):
         if self._cancel_boost_expiry_refresh is not None:
             self._cancel_boost_expiry_refresh()
             self._cancel_boost_expiry_refresh = None
+        if self._cancel_valve_timer_refresh is not None:
+            self._cancel_valve_timer_refresh()
+            self._cancel_valve_timer_refresh = None
         async with self._operation_lock:
             await self.__tion.reset_connection()
 
