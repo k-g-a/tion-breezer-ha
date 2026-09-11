@@ -4,9 +4,10 @@ import abc
 import asyncio
 import inspect
 import logging
+import math
 from asyncio import Semaphore
 from typing import Callable, List, final
-from time import localtime, strftime
+from time import localtime, monotonic, strftime
 
 from bleak import exc
 from bleak.backends.device import BLEDevice
@@ -53,9 +54,12 @@ class TionDelegation:
     def __init__(self):
         self._data: List[bytearray] = []
 
-    def handleNotification(self, handle: int, data: bytearray):
-        self._data.append(data)
-        _LOGGER.debug(f"Got data in {handle} response {bytes(data).hex()}")
+    def handleNotification(self, handle: object, data: bytearray):
+        # Do not retain a backend-owned mutable buffer. Some Bleak backends
+        # reuse notification storage after the callback returns.
+        packet = bytearray(data)
+        self._data.append(packet)
+        _LOGGER.debug(f"Got data in {handle} response {bytes(packet).hex()}")
         _LOGGER.debug(f"{self._data=}")
 
     @property
@@ -74,7 +78,12 @@ class TionException(Exception):
         self.message = message
 
 
+class TionCommandRejected(TionException):
+    """The breezer responded, but did not apply the requested state."""
+
+
 class Tion:
+    AIR_VALVE_TRANSITION_DELAY = 15.0
     statuses = ['off', 'on']
     modes = ['recirculation', 'mixed']  # 'recirculation', 'mixed' and 'outside', as Index exception
     uuid_notify: str = ""
@@ -104,8 +113,11 @@ class Tion:
         self._sound: bool = False
         self._filter_remain: float = 0.0
         self._error_code: int = 0
+        self._last_air_valve_transition_at: float | None = None
         self.__failed_connects: int = 0
         self.__notifications_enabled: bool = False
+        self.__notification_client: BleakClientWithServiceCache | None = None
+        self.__notification_generation = 0
         self.have_breezer_state: bool = False
         self._semaphore = Semaphore(1)
 
@@ -134,6 +146,38 @@ class Tion:
             _LOGGER.debug("Discarding stale notification before request: %s", bytes(stale).hex())
         self._reset_message_assembly()
         self.have_breezer_state = False
+
+    def _expected_state_response_type(self) -> bytes | None:
+        """Return the model-specific frame type used for state responses."""
+        return None
+
+    def _response_frame_type(self) -> bytes | None:
+        """Return the frame type of the most recently assembled response."""
+        return None
+
+    def _invalidate_notifications(
+        self,
+        client: BleakClientWithServiceCache | None = None,
+    ) -> None:
+        """Invalidate callbacks belonging to the current notification session."""
+        if client is not None and self.__notification_client is not client:
+            return
+        self.__notifications_enabled = False
+        self.__notification_client = None
+        self.__notification_generation += 1
+
+    def _notifications_are_ready(self) -> bool:
+        """Return whether the connected client owns the active subscription."""
+        client = self._btle
+        return bool(
+            client is not None
+            and client.is_connected
+            and self.__notifications_enabled
+            and self.__notification_client is client
+        )
+
+    async def _update_additional_state_from_breezer(self) -> None:
+        """Read model-specific state that is not included in the main response."""
 
     @abc.abstractmethod
     async def _send_request(self, request: bytearray):
@@ -194,6 +238,7 @@ class Tion:
             "filter_remain": self.filter_remain,
             "time": strftime("%H:%M", localtime()),
             "request_error_code": self._error_code,
+            "valve_transition_time_left": self.valve_transition_time_left,
             "model": self.model,
         }
 
@@ -222,8 +267,9 @@ class Tion:
             await self.connect()
             self._prepare_response()
             await self._try_write(request=self.command_getStatus)
-            response = await self._get_data_from_breezer()
+            response = await self._get_data_from_breezer(self._expected_state_response_type())
             self._decode_response(response)
+            await self._update_additional_state_safely()
         except Exception:
             await self.reset_connection()
             raise
@@ -282,7 +328,7 @@ class Tion:
             # confirm the current device state with a newly assembled response.
             self._prepare_response()
             await self._try_write(request=self.command_getStatus)
-            raw = await self._get_data_from_breezer()
+            raw = await self._get_data_from_breezer(self._expected_state_response_type())
             self._decode_response(raw)
             current_settings = self.__generate_common_json()
             current_settings.update(self._generate_model_specific_json())
@@ -291,19 +337,120 @@ class Tion:
             merged_settings["_save_state"] = bool({"sound", "light"} & new_settings.keys())
             self._validate_state_before_write(new_settings)
 
+            valve_changes = [
+                name
+                for name in ("state", "mode")
+                if name in new_settings and new_settings[name] != current_settings[name]
+            ]
+            if valve_changes and self._last_air_valve_transition_at is not None:
+                elapsed = monotonic() - self._last_air_valve_transition_at
+                delay = self.AIR_VALVE_TRANSITION_DELAY - elapsed
+                if delay > 0:
+                    _LOGGER.info(
+                        "Waiting %.1f seconds before changing Tion %s; the air valve is still settling",
+                        delay,
+                        " and ".join(valve_changes),
+                    )
+                    await asyncio.sleep(delay)
+
             encoded_request = self._encode_request(merged_settings)
             _LOGGER.debug("Will write %s", encoded_request)
             self._prepare_response()
             await self._send_request(encoded_request)
-            raw = await self._get_data_from_breezer()
+            if valve_changes:
+                # Start the settling window once the transition command has
+                # reached the breezer. Keep it even if the response later
+                # times out: the valve may still be moving.
+                self._last_air_valve_transition_at = monotonic()
+            raw = await self._get_data_from_breezer(self._expected_state_response_type())
             self._decode_response(raw)
             self._validate_state_before_write(new_settings)
+            await self._update_additional_state_safely()
+            self._verify_applied_state(new_settings, valve_changes)
+        except TionCommandRejected:
+            # Communication succeeded and the response is useful state. Do
+            # not discard the persistent session merely because firmware
+            # refused a command while reporting an active device problem.
+            raise
         except Exception:
             await self.reset_connection()
             raise
 
+    async def _update_additional_state_safely(self) -> None:
+        """Keep optional model-specific reads from invalidating regular state."""
+        try:
+            await self._update_additional_state_from_breezer()
+        except Exception as err:
+            if hasattr(self, "_boost_status_available"):
+                self._boost_status_available = False
+            _LOGGER.warning(
+                "Optional %s state update failed; keeping the valid regular state: %s",
+                self.model,
+                err,
+            )
+            self._prepare_response()
+            self.have_breezer_state = True
+
+    def _verify_applied_state(self, requested: dict, valve_changes: list[str]) -> None:
+        """Raise when firmware returned a stable state that contradicts a command."""
+        actual = self.__generate_common_json()
+        actual.update(self._generate_model_specific_json())
+        active_codes = list(getattr(self, "active_error_codes", []))
+        critical_codes = [code for code in active_codes if code.startswith("EC")]
+
+        if requested.get("reset_errors") and critical_codes:
+            raise TionCommandRejected(
+                "set",
+                "Tion processed the error-reset request but still reports active errors: "
+                + ", ".join(critical_codes),
+            )
+
+        if requested.get("reset_filter") and actual.get("filter_change_required"):
+            raise TionCommandRejected(
+                "set",
+                "Tion processed the filter-reset request but still reports that filter replacement is required",
+            )
+
+        mismatches = {
+            key: (expected, actual.get(key))
+            for key, expected in requested.items()
+            if key in {"state", "heater", "sound", "light", "mode", "fan_speed", "heater_temp"}
+            and actual.get(key) != expected
+        }
+        if not mismatches:
+            return
+
+        if not critical_codes:
+            # Firmware can clamp settings and power/air-source responses may
+            # legitimately retain old values while the valve is moving. The
+            # device response remains the published source of truth.
+            _LOGGER.debug("Tion adjusted or has not yet applied requested state: %s", mismatches)
+            return
+
+        mismatch_text = ", ".join(
+            f"{key} requested {expected!r}, device reports {reported!r}"
+            for key, (expected, reported) in mismatches.items()
+        )
+        error_text = f"; active errors: {', '.join(active_codes)}" if active_codes else ""
+        raise TionCommandRejected(
+            "set",
+            f"Tion did not apply the command ({mismatch_text}){error_text}",
+        )
+
+    async def set_boost(self, duration_seconds: int) -> None:
+        """Set a firmware-managed boost duration when supported by the model."""
+        raise TionException("set_boost", f"Native boost is not supported by {self.model}")
+
     def _validate_state_before_write(self, requested_changes: dict | None = None) -> None:
         """Reject a write when a model reports a state that makes it unsafe."""
+
+    @property
+    def valve_transition_time_left(self) -> int:
+        """Return seconds remaining in the shared physical-valve settling window."""
+        if self._last_air_valve_transition_at is None:
+            return 0
+        remaining = self.AIR_VALVE_TRANSITION_DELAY - (monotonic() - self._last_air_valve_transition_at)
+        return max(0, math.ceil(remaining))
 
     @final
     @property
@@ -353,7 +500,7 @@ class Tion:
             )
             if is_current:
                 self.have_breezer_state = False
-                self.__notifications_enabled = False
+                self._invalidate_notifications(client)
                 self._btle = None
                 self._active_ble_device = None
 
@@ -397,19 +544,24 @@ class Tion:
     @final
     async def _connect(self, need_notifications: bool = True):
         _LOGGER.debug(f"Connecting. {self.connection_status=}.")
-        if self.connection_status == "disc":
-            try:
+        try:
+            if self.connection_status == "disc":
+                if self._btle is not None:
+                    # A backend can report disconnected before its transport
+                    # and notification resources are fully released. Close the
+                    # stale client before selecting either local adapter for a
+                    # replacement connection.
+                    await self._disconnect()
                 await self._try_connect()
-            except Exception:
-                # Connector and protocol failures both require the same clean
-                # reconnect path, so cleanup must not be limited to BleakError.
-                await self.reset_connection()
-                raise
-
             if need_notifications:
                 await self._enable_notifications()
             else:
                 _LOGGER.debug("Notifications was not requested")
+        except Exception:
+            # Connector, subscription, and protocol failures all require the
+            # same clean reconnect path.
+            await self.reset_connection()
+            raise
         _LOGGER.debug(f"_connect done. {self.connection_status=}.")
 
     @final
@@ -424,7 +576,20 @@ class Tion:
             client.is_connected if client is not None else None,
             device.details.get("path") if device is not None and isinstance(device.details, dict) else None,
         )
-        self.__notifications_enabled = False
+        notification_client = self.__notification_client
+        notifications_enabled = (
+            self.__notifications_enabled and notification_client is client
+        )
+        self._invalidate_notifications()
+        if client is not None and notifications_enabled and client.is_connected:
+            try:
+                await client.stop_notify(self.uuid_notify)
+            except Exception as err:
+                _LOGGER.debug(
+                    "Could not stop notifications while disconnecting from %s: %s",
+                    self.mac,
+                    err,
+                )
         try:
             if client is not None:
                 # Always call disconnect when a client object exists.  A BLE
@@ -465,15 +630,45 @@ class Tion:
     @final
     async def _enable_notifications(self):
         _LOGGER.debug(f"Enabling notification. {self.connection_status=}")
-        if self._btle is None or not self._btle.is_connected:
+        client = self._btle
+        if client is None or not client.is_connected:
             raise exc.BleakError(f"Tion breezer {self.mac} is not connected")
-        try:
-            await self._btle.start_notify(self.uuid_notify, self._delegation.handleNotification)
-        except exc.BleakError as e:
-            _LOGGER.warning("Got exception %s while enabling notifications!" % str(e))
-            raise e
 
+        if self._notifications_are_ready():
+            _LOGGER.debug("Reusing active notification subscription for %s", self.mac)
+            return
+
+        self._invalidate_notifications()
+        generation = self.__notification_generation
+
+        def _handle_notification(handle: object, data: bytearray) -> None:
+            if (
+                self._btle is not client
+                or self.__notification_client is not client
+                or not self.__notifications_enabled
+                or self.__notification_generation != generation
+            ):
+                _LOGGER.debug(
+                    "Ignoring notification from stale BLE session: address=%s client_id=%s "
+                    "current_client_id=%s generation=%s current_generation=%s",
+                    self.mac,
+                    id(client),
+                    id(self._btle) if self._btle is not None else None,
+                    generation,
+                    self.__notification_generation,
+                )
+                return
+            self._delegation.handleNotification(handle, data)
+
+        self.__notification_client = client
         self.__notifications_enabled = True
+        try:
+            await client.start_notify(self.uuid_notify, _handle_notification)
+        except Exception as err:
+            self._invalidate_notifications(client)
+            _LOGGER.warning("Got exception %s while enabling notifications!", err)
+            raise
+
         _LOGGER.debug(f"_enable_notifications done")
         return
 
@@ -636,14 +831,34 @@ class Tion:
     @final
     async def connect(self):
         """Ensure the persistent BLE connection is ready."""
-        if self._btle is not None and self._btle.is_connected:
-            _LOGGER.debug("Reusing persistent BLE connection to %s", self.mac)
+        if self._notifications_are_ready():
+            active_path = (
+                self._active_ble_device.details.get("path")
+                if self._active_ble_device is not None
+                and isinstance(self._active_ble_device.details, dict)
+                else None
+            )
+            latest_device = self._next_btle_device
+            latest_path = (
+                latest_device.details.get("path")
+                if isinstance(latest_device, BLEDevice)
+                and isinstance(latest_device.details, dict)
+                else None
+            )
+            _LOGGER.debug(
+                "Reusing persistent BLE connection: address=%s client_id=%s "
+                "active_path=%s latest_advertisement_path=%s",
+                self.mac,
+                id(self._btle),
+                active_path,
+                latest_path,
+            )
             return
 
         async with self._semaphore:
             # Another waiter may have established the connection while this
             # task waited for the semaphore.
-            if self._btle is not None and self._btle.is_connected:
+            if self._notifications_are_ready():
                 return
             self.have_breezer_state = False
             await self._connect()
@@ -683,8 +898,11 @@ class Tion:
         raise NotImplementedError()
 
     @final
-    async def _get_data_from_breezer(self) -> bytearray:
-        """ Get byte array with breezer response on state request
+    async def _get_data_from_breezer(
+        self,
+        expected_frame_type: bytes | bytearray | list[int] | tuple[int, ...] | None = None,
+    ) -> bytearray:
+        """Get one complete response, optionally matching a protocol frame type.
 
         :returns:
           breezer response
@@ -699,6 +917,19 @@ class Tion:
             if self._delegation.haveNewData:
                 byte_response = self._delegation.data
                 if self._collect_message(byte_response):
+                    actual_frame_type = self._response_frame_type()
+                    if (
+                        expected_frame_type is not None
+                        and actual_frame_type != bytes(expected_frame_type)
+                    ):
+                        _LOGGER.warning(
+                            "Ignoring unexpected Tion response frame type %s while waiting for %s",
+                            actual_frame_type.hex() if actual_frame_type is not None else None,
+                            bytes(expected_frame_type).hex(),
+                        )
+                        self._reset_message_assembly()
+                        i = 0
+                        continue
                     self.have_breezer_state = True
                     break
                 i = 0
@@ -709,7 +940,8 @@ class Tion:
             _LOGGER.debug("Waiting too long for data")
 
         if self.have_breezer_state:
-            result = self._data
+            result = bytearray(self._data)
+            self._reset_message_assembly()
 
         else:
             raise TionException("_get_data_from_breezer", "Could not get breezer state")

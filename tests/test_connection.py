@@ -6,6 +6,17 @@ import pytest
 
 import tion_btle.tion as tion_module
 from tion_btle.s4 import TionS4
+from tion_btle.tion import TionDelegation
+
+
+def test_notification_queue_copies_backend_owned_buffer():
+    delegation = TionDelegation()
+    packet = bytearray(b"first")
+
+    delegation.handleNotification(1, packet)
+    packet[:] = b"later"
+
+    assert delegation.data == bytearray(b"first")
 
 
 @pytest.mark.asyncio
@@ -85,7 +96,18 @@ async def test_successful_requests_reuse_persistent_connection(monkeypatch):
     establish_connection = AsyncMock(return_value=client)
     monkeypatch.setattr(tion_module, "establish_connection", establish_connection)
     monkeypatch.setattr(breezer, "_try_write", AsyncMock())
-    monkeypatch.setattr(breezer, "_get_data_from_breezer", AsyncMock(return_value=bytearray(31)))
+    monkeypatch.setattr(
+        breezer,
+        "_get_data_from_breezer",
+        AsyncMock(
+            side_effect=[
+                bytearray(31),
+                bytearray(4),
+                bytearray(31),
+                bytearray(4),
+            ]
+        ),
+    )
 
     await breezer.get()
     await breezer.get()
@@ -93,6 +115,98 @@ async def test_successful_requests_reuse_persistent_connection(monkeypatch):
     establish_connection.assert_awaited_once()
     client.start_notify.assert_awaited_once()
     client.disconnect.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_notification_subscription_is_idempotent():
+    breezer = TionS4("AA:BB:CC:DD:EE:FF")
+    client = AsyncMock()
+    client.is_connected = True
+    breezer._btle = client
+
+    await breezer._enable_notifications()
+    await breezer._enable_notifications()
+
+    client.start_notify.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_connected_client_without_subscription_enables_notifications():
+    breezer = TionS4("AA:BB:CC:DD:EE:FF")
+    client = AsyncMock()
+    client.is_connected = True
+    breezer._btle = client
+
+    await breezer.connect()
+
+    client.start_notify.assert_awaited_once()
+    client.connect.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reconnect_closes_disconnected_backend_before_selecting_a_new_one(monkeypatch):
+    breezer = TionS4("AA:BB:CC:DD:EE:FF")
+    stale_client = AsyncMock()
+    stale_client.is_connected = False
+    new_client = AsyncMock()
+    new_client.is_connected = True
+    breezer._btle = stale_client
+
+    async def connect_new_client() -> bool:
+        breezer._btle = new_client
+        return True
+
+    monkeypatch.setattr(breezer, "_try_connect", AsyncMock(side_effect=connect_new_client))
+
+    await breezer.connect()
+
+    stale_client.disconnect.assert_awaited_once()
+    new_client.start_notify.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_stale_notification_callback_cannot_duplicate_new_session_packets():
+    breezer = TionS4("AA:BB:CC:DD:EE:FF")
+    old_client = AsyncMock()
+    old_client.is_connected = True
+    breezer._btle = old_client
+    await breezer._enable_notifications()
+    old_callback = old_client.start_notify.await_args.args[1]
+
+    new_client = AsyncMock()
+    new_client.is_connected = True
+    breezer._btle = new_client
+    await breezer._enable_notifications()
+    new_callback = new_client.start_notify.await_args.args[1]
+
+    old_callback(1, bytearray(b"duplicate"))
+    new_callback(1, bytearray(b"current"))
+
+    assert breezer._delegation.data == bytearray(b"current")
+    assert not breezer._delegation.haveNewData
+
+
+@pytest.mark.asyncio
+async def test_disconnect_stops_current_notification_subscription_first():
+    breezer = TionS4("AA:BB:CC:DD:EE:FF")
+    client = AsyncMock()
+    client.is_connected = True
+    events = []
+
+    async def stop_notify(_uuid):
+        events.append("stop")
+
+    async def disconnect():
+        events.append("disconnect")
+
+    client.stop_notify.side_effect = stop_notify
+    client.disconnect.side_effect = disconnect
+    breezer._btle = client
+    await breezer._enable_notifications()
+
+    await breezer._disconnect()
+
+    assert events == ["stop", "disconnect"]
 
 
 @pytest.mark.asyncio

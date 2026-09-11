@@ -34,6 +34,7 @@
         "data": {
           "name": "Name for device",
           "away_temp": "Temperature (celsius) for AWAY mode",
+          "boost_duration": "Native Boost duration (minutes)",
           "keep_alive": "Interval for querying breezer"
         }
       }

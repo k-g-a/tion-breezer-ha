@@ -19,6 +19,11 @@ class TionS4(TionLiteFamily):
     FRAME_RANDOM = 0xAD
     BLE_REQUEST_ID = 1
     MIN_STATE_RESPONSE_SIZE = 31
+    TURBO_RESPONSE_SIZE = 4
+    STATE_RESPONSE_PARAMS = [0x31, 0x32]
+    TURBO_SET_PARAMS = [0x30, 0x41]
+    TURBO_RESPONSE_PARAMS = [0x31, 0x41]
+    TURBO_REQUEST_PARAMS = [0x32, 0x41]
     ERROR_CODES = tuple(f"EC{code:02d}" for code in range(1, 12))
     WARNING_CODES = tuple(f"WS{code:02d}" for code in range(1, 7))
     HEATER_POWER_BY_TYPE = {0: 0, 1: 1000, 2: 1400}
@@ -42,6 +47,10 @@ class TionS4(TionLiteFamily):
         self._airflow_total = 0.0
         self._max_fan_speed = 6
         self._heater_output = 0
+        self._boost_active = False
+        self._boost_time_left = 0
+        self._boost_error_code = 0
+        self._boost_status_available = False
 
         if mac == "dummy":
             _LOGGER.info("Dummy mode!")
@@ -131,6 +140,10 @@ class TionS4(TionLiteFamily):
             "airflow_total": self._airflow_total,
             "max_fan_speed": self._max_fan_speed,
             "heater_output": self._heater_output,
+            "boost_active": self._boost_active,
+            "boost_time_left": self._boost_time_left,
+            "boost_error_code": self._boost_error_code,
+            "boost_status_available": self._boost_status_available,
         }
 
     @property
@@ -143,16 +156,14 @@ class TionS4(TionLiteFamily):
         return codes
 
     def _validate_state_before_write(self, requested_changes: dict | None = None) -> None:
-        if requested_changes and requested_changes.get("reset_errors"):
-            return
+        """Leave command safety and error recovery to the breezer firmware.
 
-        critical_errors = [code for code in self.active_error_codes if code.startswith("EC")]
-        if critical_errors:
-            raise TionException(
-                "s4 set",
-                "Refusing to change Tion 4S state while the device reports critical error(s): "
-                + ", ".join(critical_errors),
-            )
+        In particular, EC01-EC03 describe valve-position faults. Recovering from
+        one can require another power transition, so blocking every write while
+        an EC bit is present creates an integration-side deadlock. The error
+        mask remains exposed through active_error_codes/device_problem, and the
+        device may still reject commands it considers unsafe.
+        """
 
     def _next_request_id(self) -> int:
         self._request_id = (self._request_id + 1) & 0xFFFFFFFF
@@ -172,6 +183,88 @@ class TionS4(TionLiteFamily):
         crc = binascii.crc_hqx(frame[1:], 0xFFFF)
         frame.extend(crc.to_bytes(2, byteorder='big'))
         return frame
+
+    def _expected_state_response_type(self) -> bytes:
+        return bytes(self.STATE_RESPONSE_PARAMS)
+
+    def _decode_turbo_response(self, response: bytearray, *, reject_error: bool = False) -> None:
+        """Decode the firmware-managed 4S Turbo status payload."""
+        if len(response) != self.TURBO_RESPONSE_SIZE:
+            raise TionException(
+                "s4 _decode_turbo_response",
+                f"Got invalid Tion 4S Turbo response: expected {self.TURBO_RESPONSE_SIZE} bytes, "
+                f"got {len(response)}",
+            )
+
+        self._boost_active = bool(response[0])
+        self._boost_time_left = (
+            int.from_bytes(response[1:3], byteorder="little", signed=False)
+            if self._boost_active
+            else 0
+        )
+        self._boost_error_code = response[3]
+        self._boost_status_available = True
+        if self._boost_error_code and reject_error:
+            raise TionException(
+                "s4 _decode_turbo_response",
+                f"Tion 4S rejected the Turbo command with error code {self._boost_error_code}",
+            )
+        if self._boost_error_code:
+            _LOGGER.warning(
+                "Tion 4S Turbo status reports error code %s",
+                self._boost_error_code,
+            )
+
+    async def _update_additional_state_from_breezer(self) -> None:
+        """Read native Turbo status, which is separate from the regular state."""
+        self._prepare_response()
+        await self._try_write(request=self.command_getTurboStatus)
+        response = await self._get_data_from_breezer(self.TURBO_RESPONSE_PARAMS)
+        self._decode_turbo_response(response)
+
+    def _encode_turbo_request(self, duration_seconds: int) -> bytearray:
+        if not 0 <= duration_seconds <= 0xFFFF:
+            raise TionException(
+                "s4 _encode_turbo_request",
+                f"Tion 4S Turbo duration must be between 0 and 65535 seconds, got {duration_seconds}",
+            )
+
+        data = bytearray(self._next_request_id().to_bytes(4, byteorder="little"))
+        data.extend(duration_seconds.to_bytes(2, byteorder="little"))
+        data.append(0)
+        return self._build_frame(self.SINGLE_PACKET_ID, self.TURBO_SET_PARAMS, data)
+
+    async def set_boost(self, duration_seconds: int) -> None:
+        """Start or cancel the native, firmware-managed Turbo timer."""
+        duration_seconds = int(duration_seconds)
+        try:
+            await self.connect()
+
+            if duration_seconds > 0:
+                # Refresh regular state before starting Turbo. Device errors
+                # remain visible but do not create an integration-side command
+                # deadlock; the firmware decides whether Turbo is acceptable.
+                self._prepare_response()
+                await self._try_write(request=self.command_getStatus)
+                state = await self._get_data_from_breezer(self.STATE_RESPONSE_PARAMS)
+                self._decode_response(state)
+                self._validate_state_before_write()
+
+            self._prepare_response()
+            await self._send_request(self._encode_turbo_request(duration_seconds))
+            turbo = await self._get_data_from_breezer(self.TURBO_RESPONSE_PARAMS)
+            self._decode_turbo_response(turbo, reject_error=True)
+
+            # Turbo has a separate response and does not carry the resulting
+            # power, speed, gate, or heater state. Refresh those fields before
+            # publishing the coordinator update.
+            self._prepare_response()
+            await self._try_write(request=self.command_getStatus)
+            state = await self._get_data_from_breezer(self.STATE_RESPONSE_PARAMS)
+            self._decode_response(state)
+        except Exception:
+            await self.reset_connection()
+            raise
 
     def _encode_request(self, request: dict) -> bytearray:
         def encode_state() -> int:
@@ -216,3 +309,7 @@ class TionS4(TionLiteFamily):
     @property
     def command_getStatus(self) -> bytearray:
         return self._build_frame(TionLiteFamily.SINGLE_PACKET_ID, self.REQUEST_PARAMS)
+
+    @property
+    def command_getTurboStatus(self) -> bytearray:
+        return self._build_frame(TionLiteFamily.SINGLE_PACKET_ID, self.TURBO_REQUEST_PARAMS)

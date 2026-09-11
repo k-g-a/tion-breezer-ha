@@ -135,6 +135,29 @@ S4_SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         icon="mdi:remote",
     ),
+    SensorEntityDescription(
+        key="boost_time_left",
+        name="Boost time remaining",
+        native_unit_of_measurement=UnitOfTime.SECONDS,
+        device_class=SensorDeviceClass.DURATION,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:fan-clock",
+    ),
+    SensorEntityDescription(
+        key="valve_transition_time_left",
+        name="Valve transition time remaining",
+        native_unit_of_measurement=UnitOfTime.SECONDS,
+        device_class=SensorDeviceClass.DURATION,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        icon="mdi:valve",
+    ),
+    SensorEntityDescription(
+        key="active_error_codes",
+        name="Active error codes",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        icon="mdi:alert-circle-outline",
+    ),
 )
 
 
@@ -182,6 +205,15 @@ class TionSensor(SensorEntity, CoordinatorEntity):
             if not self.coordinator.data.get("is_on"):
                 # return zero fan speed if breezer turned off
                 value = 0
+
+        if self.entity_description.key == "active_error_codes":
+            return ", ".join(value) if value else "None"
+
+        if (
+            self.entity_description.key == "boost_time_left"
+            and not self.coordinator.data.get("boost_status_available", True)
+        ):
+            return None
 
         return value
 
