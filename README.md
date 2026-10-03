@@ -6,7 +6,12 @@ This project combines the Home Assistant integration and its Bluetooth protocol 
 
 ## Status
 
-The initial version is intended for local testing on Home Assistant 2025.6 or newer. It preserves the existing integration domain, `ha_tion_btle`, so existing config entries can continue to work after replacing the old custom component.
+This branch contains the existing private integration, domain `ha_tion_btle`.
+Its source baseline is preserved on [`maintenance/ha_tion_btle`](https://github.com/k-g-a/tion-breezer-ha/tree/maintenance/ha_tion_btle) at commit `a333d29570b6e1c4a2e430fd5c8ceb66213ae529` (merged PR #11). This is a repository snapshot; the deployed files have not been independently compared with it.
+
+The planned independent integration is **Tion Breezer 2026**, domain `tion_breezer_2026`. It will use its own directory and new configuration entries, with no automatic takeover of HA-tion devices. See [project scope and differences](docs/project-scope.md) and [development and migration](docs/development-and-migration.md).
+
+The support baseline will be the maintainer's currently tested **Home Assistant Core** version. Its exact version is awaiting confirmation. The inherited `2025.6.0` HACS minimum is historical metadata, not a verified baseline for the new integration. No compatibility claim is made for other HA versions.
 
 The BLE reliability changes include:
 
@@ -17,7 +22,9 @@ The BLE reliability changes include:
 - a five-second upper bound while waiting for protocol data;
 - serialized polling and commands per breezer;
 - removal of nested connect/disconnect calls in climate commands;
-- a one-minute retry interval after a failed poll instead of ten minutes.
+- reconnect backoff capped at one minute;
+- notification subscription cleanup and bounded duplicate-fragment handling with strict frame validation;
+- recovery after breezer power cycles without requiring an HA restart.
 
 The integration keeps one persistent BLE connection per configured breezer. This avoids the Home Assistant/BlueZ backend-selection failures observed after repeated 4S reconnects, at the cost of consuming one adapter connection slot per breezer.
 
@@ -33,7 +40,7 @@ In addition to power, fan, climate, and air-source controls, Tion 4S devices exp
 - operating time, fan time, airflow counter, and calculated total airflow;
 - maximum fan speed, communication source, and active EC/WS codes.
 
-The error-reset action is allowed while critical errors are active. Other ordinary state changes remain protected until the device reports that the critical condition has cleared.
+Device EC/WS errors remain visible. Commands are sent to the device even during an active fault; the firmware decides whether to accept them. A rejected state change is reported as an error rather than silent success. Reset Errors cannot clear a fault whose physical condition remains active. Power and air-source transitions share a 15-second valve-settling window.
 
 Tion 4S Boost uses the breezer's native Turbo timer rather than a simulated maximum-speed preset. The device reports whether Turbo is active and how many seconds remain, restores its previous operating state when the timer expires, and continues the countdown without a Bluetooth connection. The duration defaults to five minutes and can be changed in the integration options. Fan and climate entities show the same device-reported Boost state; Away and Sleep remain Home Assistant-managed convenience presets.
 
