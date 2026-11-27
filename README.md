@@ -4,10 +4,6 @@
 
 Control Tion 3S, 4S and Lite breezers over Bluetooth. The protocol library is included. This independently maintained integration targets **Home Assistant Core 2025.6.0 and later**. The maintainer runs four stable 4S units on Core 2026.11.2 with the previous domain. All four required manual pairing with `bluetoothctl`. See the [Bluetooth guide](docs/bluetooth.md) and [hardware coverage](docs/project-scope.md).
 
-## Current branch
-
-The component in this documentation branch still uses `ha_tion_btle`. For that installation, copy `custom_components/ha_tion_btle` from the [maintenance branch](https://github.com/k-g-a/tion-breezer-ha/tree/maintenance/ha_tion_btle) into `/config/custom_components/` and restart Core. Its entries keep their existing domain. The independent release described below is prepared in [PR #13](https://github.com/k-g-a/tion-breezer-ha/pull/13).
-
 ## Installation
 
 For an existing installation under `ha_tion_btle`, see [Migrate without re-adding devices](docs/development-and-migration.md) before configuring any new entries.
@@ -55,11 +51,11 @@ Tion 4S Boost uses the breezer's native Turbo timer rather than a simulated maxi
 logger:
   default: warning
   logs:
-    custom_components.ha_tion_btle: debug
-    custom_components.ha_tion_btle.tion_btle.tion: debug
-    custom_components.ha_tion_btle.tion_btle.s3: debug
-    custom_components.ha_tion_btle.tion_btle.s4: debug
-    custom_components.ha_tion_btle.tion_btle.lite: debug
+    custom_components.tion_breezer_2026: debug
+    custom_components.tion_breezer_2026.tion_btle.tion: debug
+    custom_components.tion_breezer_2026.tion_btle.s3: debug
+    custom_components.tion_breezer_2026.tion_btle.s4: debug
+    custom_components.tion_breezer_2026.tion_btle.lite: debug
 ```
 
 ## Development
