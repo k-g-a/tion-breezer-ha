@@ -1,6 +1,7 @@
 {
   "domain": "tion_breezer_2026",
   "name": "Tion Breezer 2026",
+  "categories": ["climate.fans_ventilation"],
   "codeowners": [
     "@k-g-a"
   ],
@@ -14,6 +15,5 @@
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/k-g-a/tion-breezer-ha/issues",
   "requirements": [],
-  "categories": ["climate.fans_ventilation"],
   "version": "0.1.0"
 }
