@@ -133,7 +133,6 @@ class TionFlow:
 class TionConfigFlow(TionFlow, config_entries.ConfigFlow, domain=DOMAIN):
     """Initial setup."""
     VERSION = 1
-    CONNECTION_CLASS = config_entries.CONN_CLASS_LOCAL_POLL
 
     def __init__(self):
         super().__init__()
