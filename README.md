@@ -1,12 +1,22 @@
-# Tion Breezer for Home Assistant
+# Tion Breezer 2026 for Home Assistant
 
-A standalone custom integration for controlling Tion S3, S4, and Lite breezers over Bluetooth.
+[Русский](README.ru.md)
 
-This project combines the Home Assistant integration and its Bluetooth protocol library in one repository. The library is vendored under `custom_components/ha_tion_btle/tion_btle`, so installation does not depend on a separately published `tion-btle` package.
+Control Tion 3S, 4S and Lite breezers over Bluetooth. The protocol library is included. This independently maintained integration targets **Home Assistant Core 2025.6.0 and later**. The maintainer runs four stable 4S units on Core 2026.11.2 with the previous domain. All four required manual pairing with `bluetoothctl`. See the [Bluetooth guide](docs/bluetooth.md) and [hardware coverage](docs/project-scope.md).
 
-## Status
+## Current branch
 
-The initial version is intended for local testing on Home Assistant 2025.6 or newer. It preserves the existing integration domain, `ha_tion_btle`, so existing config entries can continue to work after replacing the old custom component.
+The component in this documentation branch still uses `ha_tion_btle`. For that installation, copy `custom_components/ha_tion_btle` from the [maintenance branch](https://github.com/k-g-a/tion-breezer-ha/tree/maintenance/ha_tion_btle) into `/config/custom_components/` and restart Core. Its entries keep their existing domain. The independent release described below is prepared in [PR #13](https://github.com/k-g-a/tion-breezer-ha/pull/13).
+
+## Installation
+
+For an existing installation under `ha_tion_btle`, see [Migrate without re-adding devices](docs/development-and-migration.md) before configuring any new entries.
+
+Once the independent release is public, open the [repository in Home Assistant](https://my.home-assistant.io/redirect/hacs_repository/?owner=k-g-a&repository=tion-breezer-ha&category=integration). On Core 2025.6–2026.10 this opens HACS (install HACS first). On Core 2026.11+ it opens **Settings → Marketplace**. Add the repository as an **Integration**, download it and follow the restart prompt. Custom repositories require a GitHub connection. Catalog approval is separate.
+
+For manual installation from the independent release, copy `custom_components/tion_breezer_2026` into `/config/custom_components/` and restart Core. For a new device, open **Settings → Devices & services → Add integration → Tion Breezer 2026**. If you paired on the host, clear **Need pair**.
+
+## Bluetooth behavior
 
 The BLE reliability changes include:
 
@@ -17,7 +27,9 @@ The BLE reliability changes include:
 - a five-second upper bound while waiting for protocol data;
 - serialized polling and commands per breezer;
 - removal of nested connect/disconnect calls in climate commands;
-- a one-minute retry interval after a failed poll instead of ten minutes.
+- reconnect backoff capped at one minute;
+- notification subscription cleanup and bounded duplicate-fragment handling with strict frame validation;
+- recovery after breezer power cycles without requiring an HA restart.
 
 The integration keeps one persistent BLE connection per configured breezer. This avoids the Home Assistant/BlueZ backend-selection failures observed after repeated 4S reconnects, at the cost of consuming one adapter connection slot per breezer.
 
@@ -33,20 +45,9 @@ In addition to power, fan, climate, and air-source controls, Tion 4S devices exp
 - operating time, fan time, airflow counter, and calculated total airflow;
 - maximum fan speed, communication source, and active EC/WS codes.
 
-The error-reset action is allowed while critical errors are active. Other ordinary state changes remain protected until the device reports that the critical condition has cleared.
+Device EC/WS errors remain visible. Commands are sent to the device even during an active fault; the firmware decides whether to accept them. A rejected state change is reported as an error rather than silent success. Reset Errors cannot clear a fault whose physical condition remains active. Power and air-source transitions share a 15-second valve-settling window.
 
 Tion 4S Boost uses the breezer's native Turbo timer rather than a simulated maximum-speed preset. The device reports whether Turbo is active and how many seconds remain, restores its previous operating state when the timer expires, and continues the countdown without a Bluetooth connection. The duration defaults to five minutes and can be changed in the integration options. Fan and climate entities show the same device-reported Boost state; Away and Sleep remain Home Assistant-managed convenience presets.
-
-## Manual installation
-
-Private GitHub repositories cannot be installed through HACS. Until this repository is made public:
-
-1. Copy `custom_components/ha_tion_btle` from this repository to `/config/custom_components/ha_tion_btle` in Home Assistant.
-2. Replace the whole existing directory if the original HA-tion integration is installed.
-3. Restart Home Assistant.
-4. Existing devices should remain configured because the integration domain is unchanged. For a new device, open **Settings → Devices & services → Add integration**, then search for **Tion Breezer**.
-
-Do not copy the repository root into `custom_components`; copy the `ha_tion_btle` directory itself.
 
 ## Debug logging
 
@@ -70,8 +71,6 @@ python -m pip install -e '.[test]'
 pytest
 ruff check .
 ```
-
-The repository already uses the HACS-compatible `custom_components/<domain>` layout and contains `hacs.json`. Before public HACS distribution, add brand assets, enable HACS validation, make the repository public, and optionally add a release workflow. Releases are deliberately not automated in this initial private version.
 
 ## Prior work and provenance
 
