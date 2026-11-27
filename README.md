@@ -8,11 +8,18 @@ Control Tion 3S, 4S and Lite breezers over Bluetooth. The protocol library is in
 
 ## Installation
 
-For an existing installation under `ha_tion_btle`, install this package, then run `sh /config/custom_components/tion_breezer_2026/migrate.sh` in the HAOS Terminal & SSH app. See [Migrate without re-adding devices](docs/development-and-migration.md) before configuring any new entries.
+1. On Home Assistant Core 2026.11 and later, open **Settings → Marketplace**. On Core 2025.6–2026.10, open [HACS](https://www.hacs.xyz/) (install HACS first if needed).
+2. Search for **Tion Breezer 2026**, open the integration from the catalog and download it.
+3. Restart Home Assistant Core when prompted.
 
-Once the independent release is public, open the [repository in Home Assistant](https://my.home-assistant.io/redirect/hacs_repository/?owner=k-g-a&repository=tion-breezer-ha&category=integration). On Core 2025.6–2026.10 this opens HACS (install HACS first). On Core 2026.11+ it opens **Settings → Marketplace**. Add the repository as an **Integration**, download it and follow the restart prompt. Custom repositories require a GitHub connection. Catalog approval is separate.
+No custom repository is needed. If the integration does not appear yet, wait for the catalog to refresh. Alternatively, use the [repository link in Home Assistant](https://my.home-assistant.io/redirect/hacs_repository/?owner=k-g-a&repository=tion-breezer-ha&category=integration) and add it as a custom integration if necessary. Custom repository installation may require a GitHub connection.
 
-For manual installation from the independent release, copy `custom_components/tion_breezer_2026` into `/config/custom_components/` and restart Core. For a new device, open **Settings → Devices & services → Add integration → Tion Breezer 2026**. If you paired on the host, clear **Need pair**.
+**Migrating from `ha_tion_btle`?** Leave the old integration installed and do not add new devices yet. Follow the [migration guide](docs/development-and-migration.md) to move your existing breezers without re-adding them.
+
+For a new device, open **Settings → Devices & services → Add integration → Tion Breezer 2026**. If you paired on the host, clear **Need pair**.
+
+For manual installation, copy `custom_components/tion_breezer_2026` from the [latest release](https://github.com/k-g-a/tion-breezer-ha/releases/latest) into `/config/custom_components/` and restart Core.
+
 
 ## Bluetooth behavior
 

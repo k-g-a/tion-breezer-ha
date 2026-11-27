@@ -4,7 +4,7 @@
 
 For installations of the original HA-tion integration or this fork with domain `ha_tion_btle`. The script moves all configured breezers together. Config-entry IDs, entity IDs, device IDs, names, options and Bluetooth bonds are preserved.
 
-1. Download a Home Assistant backup. Install **Tion Breezer 2026** through HACS (Core 2025.6+) or **Settings → Marketplace** (Core 2026.11+). Leave the old integration installed and its entries in place. Skip the new-device setup screen.
+1. Download a Home Assistant backup. Search for **Tion Breezer 2026** in HACS (Core 2025.6–2026.10) or **Settings → Marketplace** (Core 2026.11+) and install it from the catalog. See the [installation guide](../README.md#installation). Leave the old integration installed and its entries in place. Skip the new-device setup screen.
 2. Open **Terminal & SSH** on HAOS and run:
 
    ```sh
