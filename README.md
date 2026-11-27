@@ -8,7 +8,7 @@ Control Tion 3S, 4S and Lite breezers over Bluetooth. The protocol library is in
 
 ## Installation
 
-For an existing installation under `ha_tion_btle`, see [Migrate without re-adding devices](docs/development-and-migration.md) before configuring any new entries.
+For an existing installation under `ha_tion_btle`, install this package, then run `sh /config/custom_components/tion_breezer_2026/migrate.sh` in the HAOS Terminal & SSH app. See [Migrate without re-adding devices](docs/development-and-migration.md) before configuring any new entries.
 
 Once the independent release is public, open the [repository in Home Assistant](https://my.home-assistant.io/redirect/hacs_repository/?owner=k-g-a&repository=tion-breezer-ha&category=integration). On Core 2025.6–2026.10 this opens HACS (install HACS first). On Core 2026.11+ it opens **Settings → Marketplace**. Add the repository as an **Integration**, download it and follow the restart prompt. Custom repositories require a GitHub connection. Catalog approval is separate.
 

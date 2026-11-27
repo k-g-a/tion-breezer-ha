@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -11,43 +12,21 @@ FILES = ("core.config_entries", "core.entity_registry", "core.device_registry")
 
 
 def migrate(entries, entities, devices):
-    selected = {e["entry_id"]: e for e in entries["entries"] if e["domain"] == OLD}
-    if not selected:
-        raise ValueError("No ha_tion_btle entries found")
-    if any(e["domain"] == NEW for e in entries["entries"]):
-        raise ValueError("Destination already has config entries")
-    macs = set()
-    for e in selected.values():
-        mac = e["data"]["mac"]
-        if not mac or mac in macs or e["unique_id"] not in (None, mac):
-            raise ValueError("Unexpected or duplicate breezer identity")
-        macs.add(mac)
-        e["domain"] = NEW
-
-    entity_count = 0
-    for e in entities["entities"] + entities.get("deleted_entities", []):
-        if e["platform"] == NEW:
-            raise ValueError("Destination already has registered entities")
-        if e["platform"] == OLD and e.get("config_entry_id") in selected:
-            e["platform"] = NEW
-            entity_count += 1
-        elif e["platform"] == OLD and e in entities["entities"]:
-            raise ValueError("Found an active legacy entity without a matching entry")
-
-    device_count = 0
-    for d in devices["devices"] + devices.get("deleted_devices", []):
-        ids = d["identifiers"]
-        if any(namespace == NEW for namespace, _ in ids):
-            raise ValueError("Destination already has registered devices")
-        for identity in ids:
-            if identity[0] == OLD and identity[1] in macs:
-                identity[0] = NEW
-                device_count += 1
-            elif identity[0] == OLD and d in devices["devices"]:
-                raise ValueError("Found an active legacy device with an unknown identity")
-        if d.get("domain") == OLD and any(ns == NEW for ns, _ in ids):
-            d["domain"] = NEW
-    return len(selected), entity_count, device_count
+    program = (Path(__file__).resolve().parents[1] / "custom_components" /
+               NEW / "migration" / "registries.jq")
+    registries = [entries, entities, devices]
+    documents = [{"key": key, "data": data} for key, data in zip(FILES, registries, strict=True)]
+    result = subprocess.run(["jq", "-e", "-f", str(program)], input=json.dumps(documents),
+                            capture_output=True, text=True)
+    if result.returncode:
+        raise ValueError(result.stderr.strip())
+    converted = json.loads(result.stdout)
+    for data, doc in zip(registries, converted, strict=True):
+        data.update(doc["data"])
+    return (sum(e["domain"] == NEW for e in entries["entries"]),
+            sum(e["platform"] == NEW for e in entities["entities"] + entities.get("deleted_entities", [])),
+            sum(ns == NEW for d in devices["devices"] + devices.get("deleted_devices", [])
+                for ns, _ in d["identifiers"]))
 
 
 def main():
