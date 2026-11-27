@@ -26,3 +26,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: home-assistant/actions/hassfest@master
+
+  marketplace:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: hacs/action@main
+        with:
+          category: integration
+
+  climate-compatibility:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        core: ["2025.6.0", "2026.11.2"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the climate entity against Home Assistant Core
+        run: |
+          docker run --rm --volume "$PWD:/repo:ro" --workdir /repo \
+            --entrypoint python "ghcr.io/home-assistant/home-assistant:${{ matrix.core }}" \
+            tests/check_climate_compatibility.py

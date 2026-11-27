@@ -9,8 +9,8 @@ from homeassistant.components.climate.const import (
  )
 from homeassistant.const import (ATTR_TEMPERATURE, CONF_NAME, EVENT_HOMEASSISTANT_START, PRECISION_WHOLE, Platform, )
 from voluptuous import All, Coerce, In, Range
-DOMAIN = 'ha_tion_btle'
-DEFAULT_NAME = "Tion Breezer"
+DOMAIN = 'tion_breezer_2026'
+DEFAULT_NAME = "Tion Breezer 2026"
 DEFAULT_BOOST_DURATION_MINUTES = 5
 
 CONF_TARGET_TEMP = "target_temp"

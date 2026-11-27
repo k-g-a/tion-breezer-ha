@@ -2,15 +2,13 @@
 
 [Русский](README.ru.md)
 
+**Unofficial integration.** Tion is a registered trademark. This community project is independent of the trademark owner, who does not develop or endorse it.
+
 Control Tion 3S, 4S and Lite breezers over Bluetooth. The protocol library is included. This independently maintained integration targets **Home Assistant Core 2025.6.0 and later**. The maintainer runs four stable 4S units on Core 2026.11.2 with the previous domain. All four required manual pairing with `bluetoothctl`. See the [Bluetooth guide](docs/bluetooth.md) and [hardware coverage](docs/project-scope.md).
-
-## Current branch
-
-The component in this documentation branch still uses `ha_tion_btle`. For that installation, copy `custom_components/ha_tion_btle` from the [maintenance branch](https://github.com/k-g-a/tion-breezer-ha/tree/maintenance/ha_tion_btle) into `/config/custom_components/` and restart Core. Its entries keep their existing domain. The independent release described below is prepared in [PR #13](https://github.com/k-g-a/tion-breezer-ha/pull/13).
 
 ## Installation
 
-For an existing installation under `ha_tion_btle`, see [Migrate without re-adding devices](docs/development-and-migration.md) before configuring any new entries.
+For an existing installation under `ha_tion_btle`, install this package, then run `sh /config/custom_components/tion_breezer_2026/migrate.sh` in the HAOS Terminal & SSH app. See [Migrate without re-adding devices](docs/development-and-migration.md) before configuring any new entries.
 
 Once the independent release is public, open the [repository in Home Assistant](https://my.home-assistant.io/redirect/hacs_repository/?owner=k-g-a&repository=tion-breezer-ha&category=integration). On Core 2025.6–2026.10 this opens HACS (install HACS first). On Core 2026.11+ it opens **Settings → Marketplace**. Add the repository as an **Integration**, download it and follow the restart prompt. Custom repositories require a GitHub connection. Catalog approval is separate.
 
@@ -55,11 +53,11 @@ Tion 4S Boost uses the breezer's native Turbo timer rather than a simulated maxi
 logger:
   default: warning
   logs:
-    custom_components.ha_tion_btle: debug
-    custom_components.ha_tion_btle.tion_btle.tion: debug
-    custom_components.ha_tion_btle.tion_btle.s3: debug
-    custom_components.ha_tion_btle.tion_btle.s4: debug
-    custom_components.ha_tion_btle.tion_btle.lite: debug
+    custom_components.tion_breezer_2026: debug
+    custom_components.tion_breezer_2026.tion_btle.tion: debug
+    custom_components.tion_breezer_2026.tion_btle.s3: debug
+    custom_components.tion_breezer_2026.tion_btle.s4: debug
+    custom_components.tion_breezer_2026.tion_btle.lite: debug
 ```
 
 ## Development

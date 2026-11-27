@@ -1,9 +1,9 @@
 {
-  "title": "Tion integration",
+  "title": "Tion Breezer 2026",
   "config": {
     "step": {
       "user": {
-        "title": "Configuration for Tion breezer",
+        "title": "Tion Breezer 2026 configuration",
         "data": {
           "model": "Device model",
           "mac": "Device MAC address",
@@ -15,7 +15,7 @@
       },
       "pair": {
         "title": "Device pairing",
-        "description": "Turn breezer to pair mode by holding button for more than 5 seconds for pairing with Home Assistant.\n\nMake sure that there is no devices connected to breezer while adding it to Home Assistant.\n\n![Location of button on bridge](/static/images/config_philips_hue.jpg)"
+        "description": "Put the breezer into pairing mode by holding its pairing button for more than 5 seconds. Disconnect other controllers and disable the old integration entry for this breezer before pairing."
       },
       "pair_failed": {
         "title": "Could not pair!",
@@ -30,7 +30,7 @@
   "options": {
     "step": {
       "init": {
-        "title": "Configuration for Tion breezer",
+        "title": "Tion Breezer 2026 configuration",
         "data": {
           "name": "Name for device",
           "away_temp": "Temperature (celsius) for AWAY mode",
@@ -40,5 +40,4 @@
       }
     }
   }
-
 }

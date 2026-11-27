@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "tion-breezer-ha-dev"
 version = "0.1.0"
-description = "Development tooling for the Tion Breezer Home Assistant integration"
+description = "Development tooling for the Tion Breezer 2026 Home Assistant integration"
 requires-python = ">=3.12"
 dependencies = [
   "bleak>=0.21",
@@ -22,7 +22,7 @@ test = [
 [tool.pytest.ini_options]
 addopts = "-q"
 asyncio_mode = "auto"
-pythonpath = ["custom_components/ha_tion_btle"]
+pythonpath = ["custom_components/tion_breezer_2026"]
 testpaths = ["tests"]
 
 [tool.ruff]

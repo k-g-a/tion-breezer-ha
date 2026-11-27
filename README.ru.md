@@ -2,15 +2,13 @@
 
 [English](README.md)
 
+**Неофициальная интеграция.** Tion — зарегистрированный товарный знак. Проект развивается независимо от правообладателя, который не участвует в его разработке и поддержке.
+
 Управление бризерами Tion 3S, 4S и Lite по Bluetooth. Библиотека протокола входит в комплект. Минимальная поддерживаемая версия — **Home Assistant Core 2025.6.0**. У сопровождающего четыре Tion 4S стабильно работают на Core 2026.11.2 под прежним доменом. Для всех четырёх потребовалось ручное сопряжение через `bluetoothctl`. См. [инструкцию по Bluetooth](docs/bluetooth.ru.md) и [сведения о поддержке моделей](docs/project-scope.ru.md).
-
-## Текущая ветка
-
-В этой ветке документации компонент пока использует домен `ha_tion_btle`. Для действующей установки скопируйте `custom_components/ha_tion_btle` из [ветки сопровождения](https://github.com/k-g-a/tion-breezer-ha/tree/maintenance/ha_tion_btle) в `/config/custom_components/` и перезапустите Core. Записи сохраняют прежний домен. Описанная ниже независимая версия готовится в [PR #13](https://github.com/k-g-a/tion-breezer-ha/pull/13).
 
 ## Установка
 
-Если бризеры уже настроены в `ha_tion_btle`, до добавления новых записей прочитайте [инструкцию по переносу без повторного добавления устройств](docs/development-and-migration.ru.md).
+Если бризеры уже настроены в `ha_tion_btle`, установите новый пакет и выполните в Terminal & SSH на HAOS команду `sh /config/custom_components/tion_breezer_2026/migrate.sh`. До добавления новых записей прочитайте [инструкцию по переносу без повторного добавления устройств](docs/development-and-migration.ru.md).
 
 После публичного выпуска откройте [репозиторий в Home Assistant](https://my.home-assistant.io/redirect/hacs_repository/?owner=k-g-a&repository=tion-breezer-ha&category=integration). Для Core 2025.6–2026.10 ссылка открывает HACS (его нужно предварительно установить), а для Core 2026.11+ — **Настройки → Marketplace**. Добавьте репозиторий как **интеграцию**, скачайте и при запросе перезапустите Core. Для пользовательского репозитория требуется подключение к GitHub. Включение в общий каталог проходит отдельно.
 
@@ -34,11 +32,11 @@ Boost у 4S запускает штатный таймер Turbo. По умол�
 logger:
   default: warning
   logs:
-    custom_components.ha_tion_btle: debug
-    custom_components.ha_tion_btle.tion_btle.tion: debug
-    custom_components.ha_tion_btle.tion_btle.s3: debug
-    custom_components.ha_tion_btle.tion_btle.s4: debug
-    custom_components.ha_tion_btle.tion_btle.lite: debug
+    custom_components.tion_breezer_2026: debug
+    custom_components.tion_breezer_2026.tion_btle.tion: debug
+    custom_components.tion_breezer_2026.tion_btle.s3: debug
+    custom_components.tion_breezer_2026.tion_btle.s4: debug
+    custom_components.tion_breezer_2026.tion_btle.lite: debug
 ```
 
 ## Разработка

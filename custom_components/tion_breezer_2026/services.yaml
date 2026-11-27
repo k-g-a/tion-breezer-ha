@@ -4,7 +4,7 @@ set_air_source:
   target:
     entity:
       domain: climate
-      integration: ha_tion_btle
+      integration: tion_breezer_2026
   fields:
     source:
       name: Air source
