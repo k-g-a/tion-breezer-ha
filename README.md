@@ -2,6 +2,8 @@
 
 [Русский](README.ru.md)
 
+**Unofficial integration.** Tion is a registered trademark. This community project is independent of the trademark owner, who does not develop or endorse it.
+
 Control Tion 3S, 4S and Lite breezers over Bluetooth. The protocol library is included. This independently maintained integration targets **Home Assistant Core 2025.6.0 and later**. The maintainer runs four stable 4S units on Core 2026.11.2 with the previous domain. All four required manual pairing with `bluetoothctl`. See the [Bluetooth guide](docs/bluetooth.md) and [hardware coverage](docs/project-scope.md).
 
 ## Installation
