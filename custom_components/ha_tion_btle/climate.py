@@ -59,13 +59,27 @@ class TionClimateEntity(ClimateEntity, CoordinatorEntity):
     _attr_fan_modes = [1, 2, 3, 4, 5, 6]
     _attr_precision = PRECISION_WHOLE
     _attr_target_temperature_step = 1
-    _attr_temperature_unit = UnitOfTemperature.CELSIUS
+    _attr_native_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_preset_modes = list(_BASE_PRESET_MODES)
     _attr_preset_mode = PRESET_NONE
     _attr_supported_features = ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.FAN_MODE | ClimateEntityFeature.PRESET_MODE
     _attr_icon = 'mdi:air-purifier'
     _attr_fan_mode: int
     coordinator: TionInstance
+
+    # Core versions before 2026.11 read temperatures through these properties.
+    if not hasattr(ClimateEntity, "native_temperature_unit"):
+        @property
+        def temperature_unit(self):
+            return self._attr_native_temperature_unit
+
+        @property
+        def current_temperature(self):
+            return self._attr_native_current_temperature
+
+        @property
+        def target_temperature(self):
+            return self._attr_native_target_temperature
 
     def __init__(self, hass: HomeAssistant, instance: TionInstance):
         CoordinatorEntity.__init__(
@@ -115,7 +129,7 @@ class TionClimateEntity(ClimateEntity, CoordinatorEntity):
 
         elif hvac_mode == HVACMode.HEAT:
             was_fan_only = self.hvac_mode == HVACMode.FAN_ONLY
-            saved_target_temp = self.target_temperature
+            saved_target_temp = self._attr_native_target_temperature
             changes = {"heater": True, "is_on": True}
             if was_fan_only and saved_target_temp is not None:
                 changes["heater_temp"] = saved_target_temp
@@ -165,8 +179,8 @@ class TionClimateEntity(ClimateEntity, CoordinatorEntity):
                 self._saved_fan_mode = None
 
         if preset_mode == PRESET_AWAY and current_preset != PRESET_AWAY:
-            _LOGGER.info("Going to AWAY mode. Will save target temperature %s", self.target_temperature)
-            self._saved_target_temp = self.target_temperature
+            _LOGGER.info("Going to AWAY mode. Will save target temperature %s", self._attr_native_target_temperature)
+            self._saved_target_temp = self._attr_native_target_temperature
             changes["heater_temp"] = self._away_temp
 
         if preset_mode == PRESET_SLEEP and current_preset != PRESET_SLEEP:
@@ -185,7 +199,7 @@ class TionClimateEntity(ClimateEntity, CoordinatorEntity):
         changes = {}
         _LOGGER.debug("Going to change preset mode from %s to %s", self.preset_mode, preset_mode)
         if preset_mode == PRESET_AWAY and self.preset_mode != PRESET_AWAY:
-            self._saved_target_temp = self.target_temperature
+            self._saved_target_temp = self._attr_native_target_temperature
             changes["heater_temp"] = self._away_temp
 
         if preset_mode != PRESET_AWAY and self.preset_mode == PRESET_AWAY and self._saved_target_temp is not None:
@@ -300,8 +314,8 @@ class TionClimateEntity(ClimateEntity, CoordinatorEntity):
         self.async_write_ha_state()
 
     def _get_current_state(self):
-        self._attr_target_temperature = self.coordinator.data.get("heater_temp")
-        self._attr_current_temperature = self.coordinator.data.get("out_temp")
+        self._attr_native_target_temperature = self.coordinator.data.get("heater_temp")
+        self._attr_native_current_temperature = self.coordinator.data.get("out_temp")
         self._attr_fan_mode = self.coordinator.data.get("fan_speed")
         if self.coordinator.supports_native_boost:
             self._attr_preset_mode = (
