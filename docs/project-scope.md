@@ -1,10 +1,12 @@
 # Project scope and differences
 
+[Русский](project-scope.ru.md)
+
 ## Identity and compatibility
 
-Tion Breezer 2026 is planned as an independently maintained Home Assistant custom integration derived from [TionAPI/HA-tion](https://github.com/TionAPI/HA-tion). Its permanent domain will be `tion_breezer_2026`. It is not an official Tion product or an in-place update to HA-tion.
+Tion Breezer 2026 is an independently maintained Home Assistant custom integration derived from [TionAPI/HA-tion](https://github.com/TionAPI/HA-tion). Its permanent domain is `tion_breezer_2026`. It is not an official Tion product or an in-place update to HA-tion.
 
-The year identifies this project; it does not promise support for every Home Assistant release in that year. The intended baseline is the maintainer's currently tested Home Assistant Core version. **The exact Core version is pending confirmation.** The previous `2025.6.0` minimum must not be presented as the new tested baseline. Supported versions will be listed explicitly once verified; older HA users should consult the original project's compatibility documentation rather than assume universal backward compatibility.
+The supported minimum is Core 2025.6.0. On Core 2025.6 the climate entity exposes legacy temperature properties. On Core 2026.11 it uses native temperature attributes. The maintainer reports four stable 4S devices under the previous integration domain on Core 2026.11.2.
 
 ## Changes relative to the original code used by this project
 
@@ -21,7 +23,7 @@ The comparison concerns the imported HA-tion source at `7f41b890b2241f8541a23e13
 | Valve transitions | Power and outside/recirculation transitions share a 15-second settling window and expose remaining time. |
 | 4S controls | Sound/light switches, filter/error reset buttons, operating counters, heater and temperature diagnostics, filter and device problem states. |
 | Distribution | Protocol library bundled with the integration; no separately published tion-btle package required. Original license boundaries and attribution retained. |
-| New identity | Planned independent directory, configuration domain, service namespace and device identifiers; migration is opt-in. |
+| New identity | Independent directory, configuration domain, service namespace and device identifiers; migration is opt-in. |
 
 ## Tested scope and limitations
 

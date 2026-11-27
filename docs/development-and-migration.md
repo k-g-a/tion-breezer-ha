@@ -1,31 +1,24 @@
-# Development and migration
+# Migrate an existing installation
 
-## Preserve the existing installation
+[Русский](development-and-migration.ru.md)
 
-`maintenance/ha_tion_btle` starts at repository commit `a333d29570b6e1c4a2e430fd5c8ceb66213ae529`. It contains the old `custom_components/ha_tion_btle` directory and merged native Boost/recovery changes. This commit is the immutable source reference; deployed files have not been compared with it.
+For an existing installation of this fork under `ha_tion_btle`, the maintenance branch remains available. Installing the independent component alongside it does not import devices. For a fresh installation, follow the README. For configured breezers, the following optional offline migration keeps the existing entries, options, device IDs and entity IDs. It requires no pairing and no changes to BlueZ.
 
-Use this branch for any deliberate updates to the existing private installation. Development of Tion Breezer 2026 uses a separate branch/PR. Repository edits, branch creation and PRs do not change files installed in Home Assistant.
+## Move all configured breezers together
 
-Private repositories cannot be installed through HACS. Continue manual installation from an explicitly chosen commit. Publication and releases are separate follow-up work.
+This is an advanced, project-provided procedure for the renamed build. Home Assistant has no supported UI operation to rename a custom integration's domain. The tool works on copies of internal storage files. Check the result on a restored test backup if possible. Start with an installation that has **no entries or devices already configured under the new domain**.
 
-## Planned new installation
+1. Create and download a full HA backup. Keep the existing component and a copy of its version. Copy the new component into `/config/custom_components/tion_breezer_2026`. Do not add it through Devices & services yet.
+2. Stop Core (`ha core stop` on HAOS). On the HAOS host via SSH port 22222, the config directory is normally `/mnt/data/supervisor/homeassistant`. From its `.storage` directory copy **core.config_entries**, **core.entity_registry** and **core.device_registry** into a private folder named `original` on a Linux machine with Python 3.10+. These files contain credentials for other integrations too. Keep Core stopped until all three files are in place.
+3. From the renamed release checkout, run the following on the copies. The first command previews the counts. For a four-breezer installation expect four config entries. If ownership, conflicts or counts are unexpected, stop and restart Core with the originals.
 
-The new integration will use `custom_components/tion_breezer_2026` and the display name **Tion Breezer 2026**. It will not modify or import old `ha_tion_btle` config entries. Device identifiers and custom actions will use the new domain; entity registry entries will belong to the new integration.
+   ```sh
+   python3 tools/migrate_registries.py original
+   python3 tools/migrate_registries.py original --output migrated
+   ```
 
-Before testing it on one breezer:
+4. Inspect the differences locally. The expected changes are the config-entry domain, entity platform and Tion device identifier namespace (including matching deleted records). Preserve entry IDs, device IDs, entity IDs, options, names and MACs. JSON formatting can differ. Copy the three migrated files back over their originals with the same ownership and permissions. If a copy fails, restore **all three originals before starting Core**.
+5. Start Core (`ha core start`). Verify the four entries, their names/options, device pages, entity IDs, history, fan commands, climate and Boost. Check automations, scripts and dashboards for `ha_tion_btle.set_air_source` and change it to `tion_breezer_2026.set_air_source`. Update explicit integration-domain filters as well. Standard fan and climate actions can keep targeting the same IDs.
+6. If verification fails, stop Core, put all three originals back together, restore the previous component and custom action references, then start Core. Use the full backup if other configuration has changed since the snapshot. Keep only one integration controlling each breezer.
 
-1. Back up Home Assistant and record the old device's options and automation/entity references.
-2. Install the new directory alongside the old directory and restart Home Assistant.
-3. Disable the old integration entry for that breezer and confirm its connection has closed.
-4. Add **Tion Breezer 2026** and configure only that breezer. Close any other BLE controller connection while pairing/testing.
-5. Verify controls, Boost expiry, reload/restart and recovery after a device power cycle.
-6. Map the new entities and actions explicitly in automations. Entity IDs, device IDs and history are not automatically transferred; matching friendly names can produce suffixed entity IDs.
-
-Keep the other breezers on the old integration. For rollback, disable the new entry before re-enabling the old entry. Do not edit Home Assistant's internal registry files or run both integrations against the same breezer.
-
-## Release prerequisites still pending
-
-- Record the exact currently tested Home Assistant Core version and set the new HACS minimum to that baseline.
-- Validate the renamed integration in Home Assistant and on hardware.
-- Add brand assets, HACS validation and release infrastructure.
-- Make the repository public only as a separate publication action.
+The offline conversion was exercised on fixture data. Live verification of the renamed build and your own registry snapshot is still required.
